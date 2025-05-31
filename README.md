@@ -1,2 +1,2 @@
-# Harmful-Algal-Bloom-Detection-System
+# HAB (Harmful Algal Bloom) Detection System
 COMP47250 Team Software Project
