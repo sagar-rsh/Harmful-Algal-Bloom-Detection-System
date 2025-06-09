@@ -198,8 +198,12 @@ Sprint 7 & 12/8 - 19/8 & Final report completion, system refinements \\
 %%------------------------------------------------
 \section{Architecture}
 %%------------------------------------------------
-
-
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{Project_Architecture.png}
+  \caption{System architecture for HAB detection and prediction. The pipeline integrates local development, version control, and notebook experimentation with an automated AWS-based MLOps workflow using Step Functions, SageMaker, and Lambda. Outputs are stored in S3 and served through a Streamlit dashboard hosted on AWS App Runner for real-time HAB prediction.}
+  \label{fig:hab-architecture}
+\end{figure}
 
 
 %%------------------------------------------------
