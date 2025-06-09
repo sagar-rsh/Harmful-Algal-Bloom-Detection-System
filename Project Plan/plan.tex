@@ -1,3 +1,4 @@
+
 \documentclass[12pt]{article}
 
 \usepackage{fancyhdr} 
@@ -209,6 +210,110 @@ Sprint 7 & 12/8 - 19/8 & Final report completion, system refinements \\
 %%------------------------------------------------
 \section{Data Plan}
 %%------------------------------------------------
+\subsection{Data Collection Strategy}
+
+\subsubsection{Ground Truth Data Sources}
+The primary source for labeled HAB events will be obtained from HAEDAT (Harmful Algal Event Database), which provides comprehensive data including:
+\begin{itemize}
+    \item Geographic coordinates of HAB events
+    \item Temporal information (timestamps)
+    \item Validated HAB event classifications
+\end{itemize}
+
+\subsubsection{Remote Sensing Image Data}
+NASA MODIS satellite constellation serves as the primary source for remote sensing imagery:
+\begin{itemize}
+    \item \textbf{MODIS-Aqua}: Ocean color and temperature data
+    \item \textbf{MODIS-Terra}: Land and atmospheric observations
+\end{itemize}
+
+\subsection{Data Preprocessing Pipeline}
+
+The preprocessing workflow follows a systematic approach:
+
+% \begin{equation}
+    \qquad \text{Raw Data} \rightarrow \text{Resampling} \rightarrow \text{Feature Extraction} \rightarrow \text{Datacube Construction}
+% \end{equation}
+
+\subsubsection{Image Preprocessing Steps}
+\begin{itemize}
+    \item \textbf{Raw Data Acquisition}: Collection of satellite imagery from MODIS sensors
+    \item \textbf{Resampling}: Standardization of spatial and temporal resolution
+    \item \textbf{Feature Extraction}: Identification of relevant spectral and spatial features
+    \item \textbf{Datacube Construction}: Organization of multi-dimensional data arrays
+\end{itemize}
+
+\subsection{Data Structure and Labeling}
+
+The dataset will be structured into two primary categories:
+\begin{itemize}
+    \item \textbf{Positive Samples}: Confirmed HAB events with corresponding satellite imagery
+    \item \textbf{Negative Samples}: Non-HAB oceanic conditions for comparison
+\end{itemize}
+
+\subsubsection{Data Augmentation Strategy}
+To enhance model robustness and increase training data diversity:
+\begin{itemize}
+    \item \textbf{Rotation}: Apply various rotational transformations
+    \item \textbf{Flipping}: Horizontal and vertical image flipping
+\end{itemize}
+
+\subsection{Pretrained Model Implementation Plan}
+
+\subsubsection{Primary Architecture}
+The implementation will utilize a transfer learning approach:
+
+% \begin{equation}
+\qquad \text{Pretrained CNN Backbone} \rightarrow \text{Feature Extraction} \rightarrow \text{Classification}
+% \end{equation}
+
+\subsubsection{Pretrained Models}
+Three candidate architectures will be evaluated:
+
+\begin{itemize}
+    \item \textbf{NASNet Mobile} (Recommended by original research)
+    \item \textbf{EfficientNet-B0/B1} (Alternative approach)
+    \item \textbf{ResNet-50} (Baseline comparison)
+\end{itemize}
+
+\subsubsection{Model Adaptation Strategies}
+The adaptation process will follow a progressive approach:
+
+\begin{itemize}
+    \item \textbf{Feature Extraction}: Initial freezing of pretrained weights
+    \item \textbf{Fine-tuning}: Gradual unfreezing of top layers
+    \item \textbf{Layer Replacement}: Modification of final classification layers
+\end{itemize}
+
+\subsection{Training Strategy}
+
+\subsubsection{Data Partitioning}
+The dataset will be divided according to standard machine learning practices:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lc@{}}
+\toprule
+\textbf{Dataset Partition} & \textbf{Percentage} \\
+\midrule
+Training Set & 70\% \\
+Validation Set & 10\% \\
+Testing Set & 20\% \\
+\bottomrule
+\end{tabular}
+% \caption{Dataset partitioning strategy}
+% \label{tab:data_partition}
+\end{table}
+
+\subsubsection{Performance Evaluation}
+Model performance will be monitored using established classification metrics:
+\begin{itemize}
+    \item \textbf{Precision}: $P = \frac{TP}{TP + FP}$
+    \item \textbf{Recall}: $R = \frac{TP}{TP + FN}$
+    \item \textbf{F1-Score}: $F_1 = 2 \cdot \frac{P \cdot R}{P + R}$
+\end{itemize}
+
+where $TP$, $FP$, and $FN$ represent true positives, false positives, and false negatives, respectively.
 
 
 
@@ -227,6 +332,15 @@ The team follows a sprint-based approach using GitHub Projects to track progress
 We maintain a shared GitHub repository where all members regularly commit updates to ensure version control and collaboration. Communication is done through a dedicated group chat and short catch-up calls when necessary.
 
 Everyone is accountable for their role, but we also coordinate cross-functionally to ensure smooth integration of all components.
+
+%%------------------------------------------------
+\section{Current Status and Future Directions}
+%%------------------------------------------------
+
+The project is currently in the data acquisition phase. This document presents the foundational strategy for HAB detection implementation. The approach will be refined and optimized based on discoveries made during the data collection and initial experimentation phases.
+
+The methodology will be continuously evaluated and improved as new insights emerge from the data analysis process.
+
 
 
 %%------------------------------------------------
