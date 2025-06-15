@@ -1,3 +1,5 @@
-flask
+Flask
 pandas
 tensorflow
+joblib
+scikit-learn
