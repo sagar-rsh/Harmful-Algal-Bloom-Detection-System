@@ -10,7 +10,7 @@ st.markdown("""
 st.markdown("---")
 
 # API Endpoint URL
-API_URL = "http://localhost:5000/predict"
+API_URL = f"{st.secrets.get("API_URL", "http://localhost:5000")}/predict"
 
 with st.form("hab_form"):
     st.subheader("Fill the Details")
