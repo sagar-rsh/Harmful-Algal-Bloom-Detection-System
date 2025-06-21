@@ -17,6 +17,8 @@ except FileNotFoundError:
 	print(f"Error: Model file not found at {MODEL_PATH}.")
 	model = None
 
+label_map = {0: "non-toxic", 1: "toxic"}
+
 # API endpoint definition
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -43,8 +45,9 @@ def predict():
 
 		# Format the response
 		result = {
-			"predicted_severity": prediction_value,
-            "confidence_scores": {
+			"predicted_value": prediction_value,
+			"predicted_label": label_map[prediction_value],
+			"confidence_scores": {
                 str(i): round(float(prob), 4) for i, prob in enumerate(prediction_proba)
             }
 		}
