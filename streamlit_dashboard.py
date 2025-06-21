@@ -37,14 +37,16 @@ if submit:
                 response.raise_for_status()  # Raise an exception for bad status codes
                 
                 prediction = response.json()
+                print(prediction)
                 # prediction = {'is_harmful': 1, 'prediction': 'Toxic'}
 
-                if prediction.get("is_harmful"):
-                    st.error(f"**Status:** {prediction['prediction']}")
+                predicted_value = prediction.get("predicted_value")
+                if predicted_value:
+                    st.error(f"**Status:** {prediction['predicted_label'].capitalize()}")
                 else:
-                    st.success(f"**Status:** {prediction['prediction']}")
+                    st.success(f"**Status:** {prediction['predicted_label'].capitalize()}")
                 
-                # st.metric(label="Confidence", value=f"{prediction['confidence']:.2%}")
+                st.metric(label="Confidence", value=f"{prediction['confidence_scores'][str(predicted_value)]*100}%")
                 
                 with st.expander("Show Raw API Response"):
                     st.json(prediction)
