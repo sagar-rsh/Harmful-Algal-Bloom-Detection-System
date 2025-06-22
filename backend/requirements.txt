@@ -4,3 +4,6 @@ tensorflow
 joblib
 scikit-learn
 gunicorn
+python-dotenv
+netCDF4
+earthaccess
