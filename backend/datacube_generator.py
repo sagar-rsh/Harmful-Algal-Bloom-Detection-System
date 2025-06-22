@@ -69,6 +69,25 @@ def extract_modality_from_granule(file_path, spatial_bounds):
         print(f"Error reading granule {Path(file_path).name}: {e}")
     return None
 
+def reproject_to_grid(lats, lons, values, spatial_bounds):
+    """Reprojects scattered satellite data points onto a regular grid."""
+    grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
+    target_lats = np.linspace(spatial_bounds['lat_min'], spatial_bounds['lat_max'], grid_size)
+    target_lons = np.linspace(spatial_bounds['lon_min'], spatial_bounds['lon_max'], grid_size)
+    grid_lons, grid_lats = np.meshgrid(target_lons, target_lats)
+
+    source_points = np.column_stack((lons.ravel(), lats.ravel()))
+    target_points = np.column_stack((grid_lons.ravel(), grid_lats.ravel()))
+    
+    valid_mask = np.isfinite(values.ravel())
+    if np.sum(valid_mask) < 4: return np.zeros((grid_size, grid_size))
+
+    interpolated = griddata(
+        source_points[valid_mask], values.ravel()[valid_mask],
+        target_points, method='linear', fill_value=0.0
+    )
+    return interpolated.reshape((grid_size, grid_size))
+
 def main():
     # Sample data for testing
     lat = 24.79667
@@ -123,7 +142,12 @@ def main():
         all_lons = np.concatenate([d['lons'] for d in daily_data_points])
         all_values = np.concatenate([d['values'] for d in daily_data_points])
 
-        print(all_lats, all_lons, all_values)
+        # Reproject the combined points onto 15x15 grid
+        image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
+        datacube_3d[:, :, day_offset] = image_2d
+        print(f"Success! Populated datacube for this day.")
+    
+    print(datacube_3d.shape)
 
 if __name__=='__main__':
     main()
