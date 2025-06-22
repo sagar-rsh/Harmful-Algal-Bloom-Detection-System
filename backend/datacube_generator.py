@@ -42,6 +42,33 @@ def search_modis_l2_data(date, spatial_bounds):
         print(f"Earthaccess search error for {date}: {e}")
         return []
 
+def extract_modality_from_granule(file_path, spatial_bounds):
+    """Extracts chlorophyll-a data from a single downloaded .nc file."""
+    try:
+        with nc.Dataset(file_path, 'r') as ds:
+            if 'geophysical_data' not in ds.groups or 'navigation_data' not in ds.groups:
+                return None
+            
+            geo_data = ds.groups['geophysical_data']
+            nav_data = ds.groups['navigation_data']
+            lats = nav_data.variables['latitude'][:]
+            lons = nav_data.variables['longitude'][:]
+
+            lat_mask = (lats >= spatial_bounds['lat_min']) & (lats <= spatial_bounds['lat_max'])
+            lon_mask = (lons >= spatial_bounds['lon_min']) & (lons <= spatial_bounds['lon_max'])
+            spatial_mask = lat_mask & lon_mask
+
+            if not np.any(spatial_mask): 
+                return None
+            
+            if MODALITY in geo_data.variables:
+                mod_data = geo_data.variables[MODALITY][:]
+                if mod_data.shape == lats.shape:
+                    return {'lats': lats[spatial_mask], 'lons': lons[spatial_mask], 'values': mod_data[spatial_mask]}
+    except Exception as e:
+        print(f"Error reading granule {Path(file_path).name}: {e}")
+    return None
+
 def main():
     # Sample data for testing
     lat = 24.79667
@@ -79,6 +106,24 @@ def main():
         raw_dir = Path("habnet_data_cache")
         raw_dir.mkdir(exist_ok=True)
         files = earthaccess.download(granules, local_path=str(raw_dir))
+
+        daily_data_points = []
+        # Process all downloaded files for the day and merge them
+        for file_path in files:
+            extracted_data = extract_modality_from_granule(file_path, spatial_bounds)
+            if extracted_data:
+                daily_data_points.append(extracted_data)
+
+        if not daily_data_points:
+            print(f"Found granules, but no valid chlor_a data within bounds.")
+            continue
+
+        # Combine data from all granules for the day
+        all_lats = np.concatenate([d['lats'] for d in daily_data_points])
+        all_lons = np.concatenate([d['lons'] for d in daily_data_points])
+        all_values = np.concatenate([d['values'] for d in daily_data_points])
+
+        print(all_lats, all_lons, all_values)
 
 if __name__=='__main__':
     main()
