@@ -1,4 +1,3 @@
-import os
 import numpy as np
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -6,14 +5,6 @@ from dotenv import load_dotenv
 import netCDF4 as nc
 from scipy.interpolate import griddata
 import earthaccess
-
-# Load environment variables
-load_dotenv()  
-
-username = os.getenv("EARTHDATA_USERNAME")
-password = os.getenv("EARTHDATA_PASSWORD")
-
-earthaccess.login(strategy="environment")
 
 # Define datacube config (must match with trained model settings)
 DATACUBE_CONFIG = {
@@ -88,13 +79,9 @@ def reproject_to_grid(lats, lons, values, spatial_bounds):
     )
     return interpolated.reshape((grid_size, grid_size))
 
-def main():
-    # Sample data for testing
-    lat = 24.79667
-    lon = -80.78388
-    start_date_str = '2015-01-18'
-
-    print(f"Fetching nc files ({lat}, {lon})")
+def generate_prediction_datacube(lat, lon, start_date_str):
+    """Generates a single 15x15x5 datacube by fetching live satellite data."""
+    print(f"Starting LIVE Datacube Generation for prediction at ({lat}, {lon})")
 
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
     num_days = DATACUBE_CONFIG['temporal_extent_days']
@@ -104,6 +91,7 @@ def main():
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
     except ValueError:
         print(f"Error: Invalid date format. Please use YYYY-MM-DD.")
+        return None
 
     # Calculate spatial bounds for the API query
     extent_deg = DATACUBE_CONFIG['spatial_extent_km'] / 111.0
@@ -146,8 +134,6 @@ def main():
         image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
         datacube_3d[:, :, day_offset] = image_2d
         print(f"Success! Populated datacube for this day.")
-    
-    print(datacube_3d.shape)
 
-if __name__=='__main__':
-    main()
+    print(f"Datacube Generation Complete. Final shape: {datacube_3d.shape}")
+    return datacube_3d
