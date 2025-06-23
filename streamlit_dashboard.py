@@ -1,5 +1,5 @@
 import streamlit as st 
-import datetime 
+from datetime import date
 import requests
 
 st.set_page_config(page_title= "HAB DETECTION SYSTEM",layout="centered")
@@ -14,21 +14,24 @@ API_URL = f"{st.secrets.get("API_URL", "http://localhost:5000")}/predict"
 
 with st.form("hab_form"):
     st.subheader("Fill the Details")
-    region = st.selectbox("Region", ["Northeast","West","Midwest","South"], format_func=lambda x: x.lower())
-    distance_to_water = st.number_input("Distance to Water (in meters)", min_value=0.0, step=1.0)
     lat = st.number_input("Latitude", format="%.6f")
     lon = st.number_input("Longitude", format="%.6f")
-
+    selected_date = st.date_input(
+        "Select a date for the start of the 5-day window",
+        min_value=date(2015, 1, 1),
+        value=date.today(),
+        max_value=date.today()
+    )
     submit = st.form_submit_button("Submit")
 
     payload = {
-        "region": region,
         "longitude": lon,
         "latitude": lat,
-        "distance_to_water_m": distance_to_water
+        "date": selected_date.strftime("%Y-%m-%d")
     }
+
 if submit:
-    if not region and not lat and not lon:
+    if not lat and not lon:
         st.error("Please fill in all the required fields.")
     else:
         try:
@@ -37,16 +40,14 @@ if submit:
                 response.raise_for_status()  # Raise an exception for bad status codes
                 
                 prediction = response.json()
-                print(prediction)
-                # prediction = {'is_harmful': 1, 'prediction': 'Toxic'}
 
-                predicted_value = prediction.get("predicted_value")
-                if predicted_value:
-                    st.error(f"**Status:** {prediction['predicted_label'].capitalize()}")
+                predicted_label = prediction.get("predicted_label")
+                if predicted_label == 'toxic':
+                    st.error(f"**Status:** {predicted_label.capitalize()}")
                 else:
-                    st.success(f"**Status:** {prediction['predicted_label'].capitalize()}")
+                    st.success(f"**Status:** {predicted_label.capitalize()}")
                 
-                st.metric(label="Confidence", value=f"{prediction['confidence_scores'][str(predicted_value)]*100}%")
+                st.metric(label="Confidence", value=f"{float(prediction['confidence_scores'][predicted_label])*100}%")
                 
                 with st.expander("Show Raw API Response"):
                     st.json(prediction)
