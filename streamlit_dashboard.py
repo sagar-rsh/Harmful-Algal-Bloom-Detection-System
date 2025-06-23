@@ -28,7 +28,6 @@ if 'prediction' not in st.session_state:
 
 # API Endpoint URL
 API_URL = f"{st.secrets.get("API_URL", "http://localhost:5000")}/predict"
-API_URL = f"http://localhost:5000/predict"
 
 # Layout
 input_col, map_col = st.columns([1, 1.5], gap='large')
