@@ -6,10 +6,20 @@ import folium
 
 st.set_page_config(page_title= "HAB Detection System",layout="wide", initial_sidebar_state="collapsed")
 
-st.title("Harmful Algal Bloom (HAB) Detection System")
+# CSS styling
 st.markdown("""
-			Enter data manually to get a prediction from the backend API.            
-			""")
+<style>
+    .block-container {
+        padding-top: 1rem;
+    }
+    /* Title styling */
+    h1 {
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("Harmful Algal Bloom (HAB) Detection System")
 st.markdown("---")
 
 # Session state to hold prediction results
@@ -51,12 +61,12 @@ with input_col:
         submit = st.form_submit_button(label='Get Prediction', use_container_width=True)
 
 with map_col:
-    st.subheader("Pick your location on the map")
+    st.subheader("Click on the Map to Select a Location")
     # Centering on Gulf of Mexico
     map_object = folium.Map(location=st.session_state.map_center, zoom_start=5)
     folium.Marker([lat, lon], popup="Selected Location", tooltip="Selected Location").add_to(map_object)
 
-    map_data = st_folium(map_object, width=700, height=500)
+    map_data = st_folium(map_object, width=700, height=400)
     if map_data and map_data["last_clicked"]:
         st.session_state.lat = map_data["last_clicked"]["lat"]
         st.session_state.lon = map_data["last_clicked"]["lng"]
@@ -66,7 +76,7 @@ with map_col:
 
 if submit:
     if not lat and not lon:
-        st.error("Please fill in all the required fields.")
+        st.error("Please provide valid latitude and longitude.")
     else:
         payload = {
             "longitude": lon,
@@ -100,7 +110,7 @@ if st.session_state.prediction:
     st.markdown("---")
     st.subheader(f"Prediction for {prediction_date}")
 
-    res_col1, res_col2 = st.columns([1, 1.5])
+    res_col1, res_col2 = st.columns([1, 1])
 
     with res_col1:
         if predicted_label == 'toxic':
