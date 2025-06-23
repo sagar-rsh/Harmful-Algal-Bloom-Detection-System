@@ -8,18 +8,22 @@ st.markdown("""
 			Enter data manually to get a prediction from the backend API.            
 			""")
 st.markdown("---")
-
+tabs = st.tabs(["Enter your details", "Pick your location on map"])
 # API Endpoint URL
 API_URL = f"{st.secrets.get("API_URL", "http://localhost:5000")}/predict"
 
-with st.form("hab_form"):
-    st.subheader("Fill the Details")
-    region = st.selectbox("Region", ["Northeast","West","Midwest","South"], format_func=lambda x: x.lower())
-    distance_to_water = st.number_input("Distance to Water (in meters)", min_value=0.0, step=1.0)
-    lat = st.number_input("Latitude", format="%.6f")
-    lon = st.number_input("Longitude", format="%.6f")
+with tabs[0]:
+    with st.form("hab_form"):
+        st.subheader("Fill the Details")
+        region = st.selectbox("Region", ["Northeast","West","Midwest","South"], format_func=lambda x: x.lower())
+        distance_to_water = st.number_input("Distance to Water (in meters)", min_value=0.0, step=1.0)
+        lat = st.number_input("Latitude", format="%.6f")
+        lon = st.number_input("Longitude", format="%.6f")
+        submit = st.form_submit_button("Submit")
 
-    submit = st.form_submit_button("Submit")
+        
+    
+    
 
     payload = {
         "region": region,
