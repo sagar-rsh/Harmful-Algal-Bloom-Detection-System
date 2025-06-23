@@ -21,16 +21,14 @@ with tabs[0]:
         lon = st.number_input("Longitude", format="%.6f")
         submit = st.form_submit_button("Submit")
 
-        
-    
-    
-
-    payload = {
+        payload = {
         "region": region,
         "longitude": lon,
         "latitude": lat,
         "distance_to_water_m": distance_to_water
-    }
+        }
+    
+    
 if submit:
     if not region and not lat and not lon:
         st.error("Please fill in all the required fields.")
@@ -60,3 +58,17 @@ if submit:
             st.error(f"Details: {e}")
         except Exception as e:
             st.error(f"An unexpected error occurred: {e}")
+#adding map logic (tab)
+with tabs[1]:
+    st.subheader("Pick your location on the map")
+    from streamlit_folium import st_folium
+    import folium
+    # Centering on Gulf of Mexico
+    default_lat, default_lon = 25.681137, -89.890137
+    map_object = folium.Map(location=[default_lat, default_lon], zoom_start=5)
+    st.markdown("**Click on the map to select a location.**")
+    map_data = st_folium(map_object, width=700, height=500)
+    if map_data and map_data["last_clicked"]:
+        selected_lat = map_data["last_clicked"]["lat"]
+        selected_lon = map_data["last_clicked"]["lng"]
+        st.success(f"Selected Location → Latitude: {selected_lat:.6f}, Longitude: {selected_lon:.6f}")
