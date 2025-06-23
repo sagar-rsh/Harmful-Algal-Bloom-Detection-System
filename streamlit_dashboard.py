@@ -18,6 +18,7 @@ if 'prediction' not in st.session_state:
 
 # API Endpoint URL
 API_URL = f"{st.secrets.get("API_URL", "http://localhost:5000")}/predict"
+API_URL = f"http://localhost:5000/predict"
 
 # Layout
 input_col, map_col = st.columns([1, 1.5], gap='large')
@@ -78,21 +79,39 @@ if submit:
                 response.raise_for_status()  # Raise an exception for bad status codes
                 
                 st.session_state.prediction = response.json()
-
-                prediction = st.session_state.prediction
-                predicted_label = prediction.get("predicted_label")
-                if predicted_label == 'toxic':
-                    st.error(f"**Status:** {predicted_label.capitalize()}")
-                else:
-                    st.success(f"**Status:** {predicted_label.capitalize()}")
-                
-                st.metric(label="Confidence", value=f"{float(prediction['confidence_scores'][predicted_label])*100}%")
-                
-                with st.expander("Show Raw API Response"):
-                    st.json(prediction)
         
         except requests.exceptions.RequestException as e:
             st.error(f"**API Error:** Could not connect to the backend service. Please ensure the Docker container is running.")
             st.error(f"Details: {e}")
         except Exception as e:
             st.error(f"An unexpected error occurred: {e}")
+
+if st.session_state.prediction:
+    prediction = st.session_state.prediction
+    predicted_label = prediction.get("predicted_label")
+    confidence_scores = prediction.get("confidence_scores")
+    prediction_date = prediction.get("prediction_for_date")
+
+    if predicted_label == 'toxic':
+        confidence_value = float(confidence_scores.get('toxic'))
+    else:
+        confidence_value = float(confidence_scores.get('non_toxic'))
+    
+    st.markdown("---")
+    st.subheader(f"Prediction for {prediction_date}")
+
+    res_col1, res_col2 = st.columns([1, 1.5])
+
+    with res_col1:
+        if predicted_label == 'toxic':
+            st.error(f"**Status:** {predicted_label.capitalize()}")
+        else:
+            st.success(f"**Status:** {predicted_label.capitalize()}")
+        
+        st.metric(label="Confidence", value=f"{confidence_value*100:.2f}%")
+        
+        st.markdown(f"The model predicts a **{confidence_value:.2%}** probability of the water being **{predicted_label}** on this date.")
+
+    with res_col2:
+        with st.expander("Show Raw API Response"):
+            st.json(prediction)
