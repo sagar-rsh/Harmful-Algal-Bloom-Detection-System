@@ -120,6 +120,12 @@ def generate_prediction_datacube(lat, lon, start_date_str):
             extracted_data = extract_modality_from_granule(file_path, spatial_bounds)
             if extracted_data:
                 daily_data_points.append(extracted_data)
+            
+            try:
+                Path(file_path).unlink()
+                print(f"Deleted cache file: {file_path}")
+            except Exception as e:
+                print(f"Failed to delete {file_path}: {e}")
 
         if not daily_data_points:
             print(f"Found granules, but no valid chlor_a data within bounds.")
