@@ -8,18 +8,7 @@ seaborn==0.13.2
 shapely==2.1.1
 tensorflow==2.19.0
 xgboost==3.0.2
-
-
-# numpy
-# pandas
-# matplotlib
-# seaborn
-# scikit-learn
-# tensorflow
-# streamlit
-# flask
-# geopandas
-# shapely
-# xgboost
-# imblearn
-
+folium==0.20.0
+requests==2.32.3
+streamlit==1.46.0
+streamlit_folium==0.25.0
