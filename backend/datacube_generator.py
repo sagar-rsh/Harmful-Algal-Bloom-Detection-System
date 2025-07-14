@@ -5,7 +5,10 @@ from dotenv import load_dotenv
 import netCDF4 as nc
 from scipy.interpolate import griddata
 import earthaccess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
+nc_lock = threading.Lock()
 # Define datacube config (must match with trained model settings)
 DATACUBE_CONFIG = {
     'spatial_extent_km': 30,
@@ -36,26 +39,27 @@ def search_modis_l2_data(date, spatial_bounds):
 def extract_modality_from_granule(file_path, spatial_bounds):
     """Extracts chlorophyll-a data from a single downloaded .nc file."""
     try:
-        with nc.Dataset(file_path, 'r') as ds:
-            if 'geophysical_data' not in ds.groups or 'navigation_data' not in ds.groups:
-                return None
-            
-            geo_data = ds.groups['geophysical_data']
-            nav_data = ds.groups['navigation_data']
-            lats = nav_data.variables['latitude'][:]
-            lons = nav_data.variables['longitude'][:]
+        with nc_lock:
+            with nc.Dataset(file_path, 'r') as ds:
+                if 'geophysical_data' not in ds.groups or 'navigation_data' not in ds.groups:
+                    return None
+                
+                geo_data = ds.groups['geophysical_data']
+                nav_data = ds.groups['navigation_data']
+                lats = nav_data.variables['latitude'][:]
+                lons = nav_data.variables['longitude'][:]
 
-            lat_mask = (lats >= spatial_bounds['lat_min']) & (lats <= spatial_bounds['lat_max'])
-            lon_mask = (lons >= spatial_bounds['lon_min']) & (lons <= spatial_bounds['lon_max'])
-            spatial_mask = lat_mask & lon_mask
+                lat_mask = (lats >= spatial_bounds['lat_min']) & (lats <= spatial_bounds['lat_max'])
+                lon_mask = (lons >= spatial_bounds['lon_min']) & (lons <= spatial_bounds['lon_max'])
+                spatial_mask = lat_mask & lon_mask
 
-            if not np.any(spatial_mask): 
-                return None
-            
-            if MODALITY in geo_data.variables:
-                mod_data = geo_data.variables[MODALITY][:]
-                if mod_data.shape == lats.shape:
-                    return {'lats': lats[spatial_mask], 'lons': lons[spatial_mask], 'values': mod_data[spatial_mask]}
+                if not np.any(spatial_mask): 
+                    return None
+                
+                if MODALITY in geo_data.variables:
+                    mod_data = geo_data.variables[MODALITY][:]
+                    if mod_data.shape == lats.shape:
+                        return {'lats': lats[spatial_mask], 'lons': lons[spatial_mask], 'values': mod_data[spatial_mask]}
     except Exception as e:
         print(f"Error reading granule {Path(file_path).name}: {e}")
     return None
@@ -79,9 +83,55 @@ def reproject_to_grid(lats, lons, values, spatial_bounds):
     )
     return interpolated.reshape((grid_size, grid_size))
 
+def process_single_day(day_offset, start_date, spatial_bounds):
+    """
+    Encapsulates all the work needed for one day.
+    It will be executed in a separate thread for each of the 5 days.
+    """
+    grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
+    target_date = start_date + timedelta(days=day_offset)
+    print(f"[Thread] Starting work for Day {day_offset + 1}: {target_date.strftime('%Y-%m-%d')}")
+
+    granules = search_modis_l2_data(target_date, spatial_bounds)
+    if not granules:
+        print(f"[Thread] No satellite data found for Day {day_offset + 1}.")
+        return day_offset, np.zeros((grid_size, grid_size)) # Return an empty grid
+    
+    # Download the found granules to a local cache
+    raw_dir = Path("habnet_data_cache")
+    raw_dir.mkdir(exist_ok=True)
+    files = earthaccess.download(granules, local_path=str(raw_dir))
+
+    daily_data_points = []
+    # Process all downloaded files for the day and merge them
+    for file_path in files:
+        extracted_data = extract_modality_from_granule(file_path, spatial_bounds)
+        if extracted_data:
+            daily_data_points.append(extracted_data)
+
+        try:
+            Path(file_path).unlink()
+            print(f"Deleted cache file: {file_path}")
+        except Exception as e:
+            print(f"Failed to delete {file_path}: {e}")
+    
+    if not daily_data_points:
+        print(f"[Thread] No valid chlor_a data in granules for Day {day_offset + 1}.")
+        return day_offset, np.zeros((grid_size, grid_size))
+
+    all_lats = np.concatenate([d['lats'] for d in daily_data_points])
+    all_lons = np.concatenate([d['lons'] for d in daily_data_points])
+    all_values = np.concatenate([d['values'] for d in daily_data_points])
+
+    image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
+    print(f"[Thread] Finished work for Day {day_offset + 1}.")
+    
+    # Return the day's index and the processed 2D image
+    return day_offset, image_2d
+
 def generate_prediction_datacube(lat, lon, start_date_str):
     """Generates a single 15x15x5 datacube by fetching live satellite data."""
-    print(f"Starting LIVE Datacube Generation for prediction at ({lat}, {lon})")
+    print(f"Starting Concurrent Datacube Generation for prediction at ({lat}, {lon})")
 
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
     num_days = DATACUBE_CONFIG['temporal_extent_days']
@@ -100,46 +150,21 @@ def generate_prediction_datacube(lat, lon, start_date_str):
         'lon_min': lon - extent_deg / 2, 'lon_max': lon + extent_deg / 2
     }
 
-    for day_offset in range(num_days):
-        target_date = start_date + timedelta(days=day_offset)
-        print(f"Fetching data for Day {day_offset + 1}: {target_date.strftime('%Y-%m-%d')}...")
+    # Run tasks for each day in parallel
+    # The number of workers (threads) is set to num_days (one for each day) for now (might need to update it later)
+    with ThreadPoolExecutor(max_workers=num_days) as executor:
+        # This creates a list of future objects, which are placeholders for the results.
+        future_to_day = {executor.submit(process_single_day, day, start_date, spatial_bounds): day for day in range(num_days)}
 
-        granules = search_modis_l2_data(target_date, spatial_bounds)
-        if not granules:
-            print(f"No satellite data found for this day.")
-            continue # Leave this day's slice as zeros
-
-        # Download the found granules to a local cache
-        raw_dir = Path("habnet_data_cache")
-        raw_dir.mkdir(exist_ok=True)
-        files = earthaccess.download(granules, local_path=str(raw_dir))
-
-        daily_data_points = []
-        # Process all downloaded files for the day and merge them
-        for file_path in files:
-            extracted_data = extract_modality_from_granule(file_path, spatial_bounds)
-            if extracted_data:
-                daily_data_points.append(extracted_data)
-            
+        # as_completed waits for any of the futures to finish.
+        for future in as_completed(future_to_day):
             try:
-                Path(file_path).unlink()
-                print(f"Deleted cache file: {file_path}")
+                # Get the results
+                day_offset, image_2d = future.result() # tuple (day_offset, image_2d)
+                datacube_3d[:, :, day_offset] = image_2d
             except Exception as e:
-                print(f"Failed to delete {file_path}: {e}")
-
-        if not daily_data_points:
-            print(f"Found granules, but no valid chlor_a data within bounds.")
-            continue
-
-        # Combine data from all granules for the day
-        all_lats = np.concatenate([d['lats'] for d in daily_data_points])
-        all_lons = np.concatenate([d['lons'] for d in daily_data_points])
-        all_values = np.concatenate([d['values'] for d in daily_data_points])
-
-        # Reproject the combined points onto 15x15 grid
-        image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
-        datacube_3d[:, :, day_offset] = image_2d
-        print(f"Success! Populated datacube for this day.")
+                day = future[future]
+                print(f'Day {day + 1} generated an exception: {e}')
 
     print(f"Datacube Generation Complete. Final shape: {datacube_3d.shape}")
     return datacube_3d
