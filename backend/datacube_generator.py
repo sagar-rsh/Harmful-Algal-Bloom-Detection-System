@@ -15,7 +15,15 @@ DATACUBE_CONFIG = {
     'temporal_extent_days': 5,
     'spatial_resolution_km': 2,
 }
-MODALITY = 'chlor_a'
+HABNET_MODIS_AQUA_MODALITIES = [
+    'chlor_a',      
+    'Rrs_412',     
+    'Rrs_443',      
+    'Rrs_488',      
+    'Rrs_531',    
+    'Rrs_555',      
+    'par'           
+]
 
 def search_modis_l2_data(date, spatial_bounds):
     """Searches for MODIS L2 data for a specific date and bounding box."""
@@ -36,12 +44,12 @@ def search_modis_l2_data(date, spatial_bounds):
         print(f"Earthaccess search error for {date}: {e}")
         return []
 
-def extract_modality_from_granule(file_path, spatial_bounds):
+def extract_modality_from_granule(file_path, modality, spatial_bounds):
     """Extracts chlorophyll-a data from a single downloaded .nc file."""
     try:
         with nc_lock:
             with nc.Dataset(file_path, 'r') as ds:
-                if 'geophysical_data' not in ds.groups or 'navigation_data' not in ds.groups:
+                if 'geophysical_data' not in ds.groups or 'navigation_data' not in ds.groups or modality not in ds.groups['geophysical_data'].variables:
                     return None
                 
                 geo_data = ds.groups['geophysical_data']
@@ -56,12 +64,25 @@ def extract_modality_from_granule(file_path, spatial_bounds):
                 if not np.any(spatial_mask): 
                     return None
                 
-                if MODALITY in geo_data.variables:
-                    mod_data = geo_data.variables[MODALITY][:]
-                    if mod_data.shape == lats.shape:
-                        return {'lats': lats[spatial_mask], 'lons': lons[spatial_mask], 'values': mod_data[spatial_mask]}
+                vals_roi = geo_data.variables[modality][:][spatial_mask]
+                if hasattr(vals_roi, 'mask'):
+                    valid_mask = ~vals_roi.mask
+                else:
+                    valid_mask = np.isfinite(vals_roi)
+                
+                if modality == 'chlor_a':
+                    valid_mask = valid_mask & (vals_roi > 0) & (vals_roi < 1000)
+                elif modality.startswith('Rrs_'):
+                    valid_mask = valid_mask & (vals_roi > 0) & (vals_roi < 1.0)
+                elif modality == 'par':
+                    valid_mask = valid_mask & (vals_roi > 0)
+
+                if not np.any(valid_mask):
+                    return None
+                
+                return {'lats': lats[spatial_mask][valid_mask], 'lons': lons[spatial_mask][valid_mask], 'values': vals_roi[valid_mask]}
     except Exception as e:
-        print(f"Error reading granule {Path(file_path).name}: {e}")
+        print(f"Error reading modality {modality} from {Path(file_path).name}: {e}")
     return None
 
 def reproject_to_grid(lats, lons, values, spatial_bounds):
@@ -74,13 +95,20 @@ def reproject_to_grid(lats, lons, values, spatial_bounds):
     source_points = np.column_stack((lons.ravel(), lats.ravel()))
     target_points = np.column_stack((grid_lons.ravel(), grid_lats.ravel()))
     
-    valid_mask = np.isfinite(values.ravel())
-    if np.sum(valid_mask) < 4: return np.zeros((grid_size, grid_size))
+    if len(values) < 4: 
+        return np.zeros((grid_size, grid_size))
 
+    # interpolate to grid with linear
     interpolated = griddata(
-        source_points[valid_mask], values.ravel()[valid_mask],
-        target_points, method='linear', fill_value=0.0
+        source_points, values,
+        target_points, method='linear', fill_value=np.nan
     )
+    # fill leftover NaNs with nearest neighbor if possible
+    if np.any(np.isnan(interpolated)):
+        interpolated_nn = griddata(source_points, values, target_points, method='nearest', fill_value=0.0)
+        nan_mask = np.isnan(interpolated)
+        interpolated[nan_mask] = interpolated_nn[nan_mask]
+
     return interpolated.reshape((grid_size, grid_size))
 
 def process_single_day(day_offset, start_date, spatial_bounds):
@@ -91,51 +119,52 @@ def process_single_day(day_offset, start_date, spatial_bounds):
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
     target_date = start_date + timedelta(days=day_offset)
     print(f"[Thread] Starting work for Day {day_offset + 1}: {target_date.strftime('%Y-%m-%d')}")
+    daily_images = {mod: np.zeros((grid_size, grid_size)) for mod in HABNET_MODIS_AQUA_MODALITIES}
 
     granules = search_modis_l2_data(target_date, spatial_bounds)
     if not granules:
         print(f"[Thread] No satellite data found for Day {day_offset + 1}.")
-        return day_offset, np.zeros((grid_size, grid_size)) # Return an empty grid
+        return day_offset, daily_images # Return an empty grid
     
     # Download the found granules to a local cache
     raw_dir = Path("habnet_data_cache")
     raw_dir.mkdir(exist_ok=True)
     files = earthaccess.download(granules, local_path=str(raw_dir))
 
-    daily_data_points = []
-    # Process all downloaded files for the day and merge them
-    for file_path in files:
-        extracted_data = extract_modality_from_granule(file_path, spatial_bounds)
-        if extracted_data:
-            daily_data_points.append(extracted_data)
+    for modality in HABNET_MODIS_AQUA_MODALITIES:
+        modality_points = [d for f in files if (d := extract_modality_from_granule(f, modality, spatial_bounds)) is not None]
+    
+        if not modality_points:
+            continue
 
+        all_lats = np.concatenate([d['lats'] for d in modality_points])
+        all_lons = np.concatenate([d['lons'] for d in modality_points])
+        all_values = np.concatenate([d['values'] for d in modality_points])
+
+        image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
+        daily_images[modality] = image_2d
+
+    print(f"[Thread] Finished work for Day {day_offset + 1}.")
+    # Clean up
+    for file_path in files:
         try:
             Path(file_path).unlink()
             print(f"Deleted cache file: {file_path}")
         except Exception as e:
             print(f"Failed to delete {file_path}: {e}")
     
-    if not daily_data_points:
-        print(f"[Thread] No valid chlor_a data in granules for Day {day_offset + 1}.")
-        return day_offset, np.zeros((grid_size, grid_size))
-
-    all_lats = np.concatenate([d['lats'] for d in daily_data_points])
-    all_lons = np.concatenate([d['lons'] for d in daily_data_points])
-    all_values = np.concatenate([d['values'] for d in daily_data_points])
-
-    image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
-    print(f"[Thread] Finished work for Day {day_offset + 1}.")
-    
     # Return the day's index and the processed 2D image
-    return day_offset, image_2d
+    return day_offset, daily_images
 
 def generate_prediction_datacube(lat, lon, start_date_str):
-    """Generates a single 15x15x5 datacube by fetching live satellite data."""
+    """Generates a single 15x15x7 datacube by fetching live satellite data."""
     print(f"Starting Concurrent Datacube Generation for prediction at ({lat}, {lon})")
 
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
     num_days = DATACUBE_CONFIG['temporal_extent_days']
-    datacube_3d = np.zeros((grid_size, grid_size, num_days))
+    num_modalities = len(HABNET_MODIS_AQUA_MODALITIES)
+
+    final_datacube = np.zeros((grid_size, grid_size, num_days, num_modalities))
 
     try:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
@@ -160,11 +189,11 @@ def generate_prediction_datacube(lat, lon, start_date_str):
         for future in as_completed(future_to_day):
             try:
                 # Get the results
-                day_offset, image_2d = future.result() # tuple (day_offset, image_2d)
-                datacube_3d[:, :, day_offset] = image_2d
+                day_offset, daily_images = future.result() # tuple (day_offset, daily_images)
+                for mod_idx, modality in enumerate(HABNET_MODIS_AQUA_MODALITIES):
+                    final_datacube[:, :, day_offset, mod_idx] = daily_images[modality]
             except Exception as e:
-                day = future[future]
-                print(f'Day {day + 1} generated an exception: {e}')
+                print(f'Day {future_to_day[future] + 1} generated an exception: {e}')
 
-    print(f"Datacube Generation Complete. Final shape: {datacube_3d.shape}")
-    return datacube_3d
+    print(f"Datacube Generation Complete. Final shape: {final_datacube.shape}")
+    return final_datacube
