@@ -4,6 +4,7 @@ import earthaccess
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+import sys
 
 # Load environment variables
 load_dotenv()
@@ -14,6 +15,7 @@ try:
 	earthaccess.login(strategy="environment")
 except Exception as e:
 	print(f"Error: NASA Earthdata login failed: {e}")
+	sys.exit(0)
 
 lat, lon = 27.77624, -82.77021
 start_date = "2015-11-09"

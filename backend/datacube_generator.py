@@ -11,8 +11,8 @@ import threading
 nc_lock = threading.Lock()
 # Define datacube config (must match with trained model settings)
 DATACUBE_CONFIG = {
-    'spatial_extent_km': 30,
-    'temporal_extent_days': 5,
+    'spatial_extent_km': 100,
+    'temporal_extent_days': 10,
     'spatial_resolution_km': 2,
 }
 HABNET_MODIS_AQUA_MODALITIES = [
