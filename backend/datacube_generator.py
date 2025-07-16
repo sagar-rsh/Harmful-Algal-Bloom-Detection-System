@@ -7,6 +7,7 @@ from scipy.interpolate import griddata
 import earthaccess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+from pyproj import Transformer
 
 nc_lock = threading.Lock()
 # Define datacube config (must match with trained model settings)
@@ -24,6 +25,20 @@ HABNET_MODIS_AQUA_MODALITIES = [
     'Rrs_555',      
     'par'           
 ]
+
+def get_utm_zone_from_coords(lat, lon):
+    """Determines the correct UTM zone EPSG code from lat/lon."""
+    utm_zone = int((lon + 180) / 6) + 1
+    epsg_code = f"326{utm_zone:02d}" if lat >= 0 else f"327{utm_zone:02d}"
+    return epsg_code
+
+def setup_utm_projection(lat, lon):
+    """Sets up the forward transformer for a location's UTM zone."""
+    if not Transformer: 
+        return None, None
+    epsg_code = get_utm_zone_from_coords(lat, lon)
+    transformer_to_utm = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg_code}", always_xy=True)
+    return transformer_to_utm, epsg_code
 
 def search_modis_l2_data(date, spatial_bounds):
     """Searches for MODIS L2 data for a specific date and bounding box."""
@@ -44,8 +59,8 @@ def search_modis_l2_data(date, spatial_bounds):
         print(f"Earthaccess search error for {date}: {e}")
         return []
 
-def extract_modality_from_granule(file_path, modality, spatial_bounds):
-    """Extracts chlorophyll-a data from a single downloaded .nc file."""
+def extract_modality_from_granule(file_path, modality, spatial_bounds, transformer_to_utm):
+    """Extracts a single modality's data and projects its coordinates to UTM."""
     try:
         with nc_lock:
             with nc.Dataset(file_path, 'r') as ds:
@@ -80,20 +95,28 @@ def extract_modality_from_granule(file_path, modality, spatial_bounds):
                 if not np.any(valid_mask):
                     return None
                 
-                return {'lats': lats[spatial_mask][valid_mask], 'lons': lons[spatial_mask][valid_mask], 'values': vals_roi[valid_mask]}
+                final_lons = lons[spatial_mask][valid_mask]
+                final_lats = lats[spatial_mask][valid_mask]
+                final_vals = vals_roi[valid_mask]
+                
+                utm_x, utm_y = transformer_to_utm.transform(final_lons, final_lats)
+                return {'utm_x': utm_x, 'utm_y': utm_y, 'values': final_vals}
     except Exception as e:
         print(f"Error reading modality {modality} from {Path(file_path).name}: {e}")
     return None
 
-def reproject_to_grid(lats, lons, values, spatial_bounds):
-    """Reprojects scattered satellite data points onto a regular grid."""
+def reproject_to_grid(utm_x, utm_y, values, center_utm_x, center_utm_y):
+    """Reprojects scattered UTM data points onto a regular 50x50 grid."""
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
-    target_lats = np.linspace(spatial_bounds['lat_min'], spatial_bounds['lat_max'], grid_size)
-    target_lons = np.linspace(spatial_bounds['lon_min'], spatial_bounds['lon_max'], grid_size)
-    grid_lons, grid_lats = np.meshgrid(target_lons, target_lats)
+    half_extent_m = DATACUBE_CONFIG['spatial_extent_km'] * 1000 / 2
+    resolution_m = DATACUBE_CONFIG['spatial_resolution_km'] * 1000
 
-    source_points = np.column_stack((lons.ravel(), lats.ravel()))
-    target_points = np.column_stack((grid_lons.ravel(), grid_lats.ravel()))
+    x_coords = np.linspace(center_utm_x - half_extent_m + resolution_m / 2, center_utm_x + half_extent_m - resolution_m / 2, grid_size)
+    y_coords = np.linspace(center_utm_y - half_extent_m + resolution_m / 2, center_utm_y + half_extent_m - resolution_m / 2, grid_size)
+    grid_x, grid_y = np.meshgrid(x_coords, y_coords)
+
+    source_points = np.column_stack((utm_x, utm_y))
+    target_points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
     
     if len(values) < 4: 
         return np.zeros((grid_size, grid_size))
@@ -111,10 +134,10 @@ def reproject_to_grid(lats, lons, values, spatial_bounds):
 
     return interpolated.reshape((grid_size, grid_size))
 
-def process_single_day(day_offset, start_date, spatial_bounds):
+def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm):
     """
     Encapsulates all the work needed for one day.
-    It will be executed in a separate thread for each of the 5 days.
+    It will be executed in a separate thread for each of the 10 days.
     """
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
     target_date = start_date + timedelta(days=day_offset)
@@ -132,16 +155,16 @@ def process_single_day(day_offset, start_date, spatial_bounds):
     files = earthaccess.download(granules, local_path=str(raw_dir))
 
     for modality in HABNET_MODIS_AQUA_MODALITIES:
-        modality_points = [d for f in files if (d := extract_modality_from_granule(f, modality, spatial_bounds)) is not None]
+        modality_points = [d for f in files if (d := extract_modality_from_granule(f, modality, spatial_bounds, transformer_to_utm)) is not None]
     
         if not modality_points:
             continue
 
-        all_lats = np.concatenate([d['lats'] for d in modality_points])
-        all_lons = np.concatenate([d['lons'] for d in modality_points])
+        all_utm_x = np.concatenate([d['utm_x'] for d in modality_points])
+        all_utm_y = np.concatenate([d['utm_y'] for d in modality_points])
         all_values = np.concatenate([d['values'] for d in modality_points])
 
-        image_2d = reproject_to_grid(all_lats, all_lons, all_values, spatial_bounds)
+        image_2d = reproject_to_grid(all_utm_x, all_utm_y, all_values, center_utm_x, center_utm_y)
         daily_images[modality] = image_2d
 
     print(f"[Thread] Finished work for Day {day_offset + 1}.")
@@ -157,7 +180,7 @@ def process_single_day(day_offset, start_date, spatial_bounds):
     return day_offset, daily_images
 
 def generate_prediction_datacube(lat, lon, start_date_str):
-    """Generates a single 15x15x7 datacube by fetching live satellite data."""
+    """Generates a single 50x50x10x7 datacube by fetching live satellite data."""
     print(f"Starting Concurrent Datacube Generation for prediction at ({lat}, {lon})")
 
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
@@ -172,6 +195,12 @@ def generate_prediction_datacube(lat, lon, start_date_str):
         print(f"Error: Invalid date format. Please use YYYY-MM-DD.")
         return None
 
+    # Setup UTM projection based on the requested location
+    transformer_to_utm, _ = setup_utm_projection(lat, lon)
+    if not transformer_to_utm:
+        return None
+    center_utm_x, center_utm_y = transformer_to_utm.transform(lon, lat)
+
     # Calculate spatial bounds for the API query
     extent_deg = DATACUBE_CONFIG['spatial_extent_km'] / 111.0
     spatial_bounds = {
@@ -183,7 +212,8 @@ def generate_prediction_datacube(lat, lon, start_date_str):
     # The number of workers (threads) is set to num_days (one for each day) for now (might need to update it later)
     with ThreadPoolExecutor(max_workers=num_days) as executor:
         # This creates a list of future objects, which are placeholders for the results.
-        future_to_day = {executor.submit(process_single_day, day, start_date, spatial_bounds): day for day in range(num_days)}
+        future_to_day = {
+            executor.submit(process_single_day, day, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm): day for day in range(num_days)}
 
         # as_completed waits for any of the futures to finish.
         for future in as_completed(future_to_day):

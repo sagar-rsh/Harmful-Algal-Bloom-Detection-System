@@ -7,3 +7,4 @@ gunicorn
 python-dotenv
 netCDF4
 earthaccess
+pyproj==3.7.1
