@@ -152,7 +152,7 @@ def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, cen
     # Download the found granules to a local cache
     raw_dir = Path("habnet_data_cache")
     raw_dir.mkdir(exist_ok=True)
-    files = earthaccess.download(granules, local_path=str(raw_dir))
+    files = earthaccess.download([granules[0]], local_path=str(raw_dir))
 
     for modality in HABNET_MODIS_AQUA_MODALITIES:
         modality_points = [d for f in files if (d := extract_modality_from_granule(f, modality, spatial_bounds, transformer_to_utm)) is not None]
