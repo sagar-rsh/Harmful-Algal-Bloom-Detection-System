@@ -1,4 +1,5 @@
 from datacube_generator import generate_prediction_datacube
+from image_processor import convert_datacube_to_images
 import numpy as np
 import earthaccess
 import os
@@ -23,6 +24,10 @@ lat, lon = 27.77624, -82.77021
 start_date = "2015-11-09"
 
 datacube = generate_prediction_datacube(lat, lon, start_date)
-print("--- %s seconds ---" % (time.time() - start_time))
 print(f'\n{datacube.shape}\n')
 # print(f'\n{datacube}')
+
+image_sequence = convert_datacube_to_images(datacube)
+print(f'\n{image_sequence.shape}\n')
+
+print("--- %s seconds ---" % (time.time() - start_time))

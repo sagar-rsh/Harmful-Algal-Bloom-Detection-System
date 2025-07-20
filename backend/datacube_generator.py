@@ -19,11 +19,7 @@ DATACUBE_CONFIG = {
 HABNET_MODIS_AQUA_MODALITIES = [
     'chlor_a',      
     'Rrs_412',     
-    'Rrs_443',      
-    'Rrs_488',      
-    'Rrs_531',    
-    'Rrs_555',      
-    'par'           
+    'Rrs_443'      
 ]
 
 def get_utm_zone_from_coords(lat, lon):
