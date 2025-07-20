@@ -6,15 +6,18 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from datacube_generator import generate_prediction_datacube
+from image_processor import convert_datacube_to_images
+from joblib import load
 
 # Initialize the Flask application
 app = Flask(__name__)
 
 # Model Loading:
 # Load the trained model
-MODEL_PATH = 'models/hab_model.keras' # local path for now. Final version will fetch the model from S3.
+MODEL_PATH = 'models/model_rf.pkl' # local path for now. Final version will fetch the model from S3.
 try:
-	model = load_model(MODEL_PATH)
+	# model = load_model(MODEL_PATH)
+	model = load(MODEL_PATH)
 	print("Model loaded successfully.")
 except FileNotFoundError:
 	print(f"Error: Model file not found at {MODEL_PATH}.")
@@ -53,24 +56,38 @@ def predict():
 	start_date_str = data['date']
 
 	try:
-		# Generate 15x15x5 datacube
+		# Generate (50, 50, 10, 3) datacube
 		datacube = generate_prediction_datacube(lat, lon, start_date_str)
 
 		if datacube is None:
-			return jsonify({"error": "Failed to generate datacube. Check input date format."}), 400
+			return jsonify({"error": "Failed to generate datacube"}), 400
 		
+		# Convert to resized, normalized, concatenated image sequence
+		# The output shape is now (10, 64, 64, 9)
+		image_sequence = convert_datacube_to_images(datacube)
+
 		'''
-		# Prepare datacube for model
-		# Current datacube shape is 3D: (width, height, time_steps)-> (15, 15, 5), we need 4D input: (batch_size, width, height, time_steps) for the model
+		# Prepare sequence for model
+		# Current shape is 4D: (time_steps, height, width, channels)-> (10, 64, 64, 9), we need to add the batch dimension: (batch_size, time_steps, height, width, channels) for the model -> (1, 10, 64, 64, 9)
 		# batch: How many datacubes we are predicting at once
 		'''
-		# Adding batch dimension - (1, 15, 15, 5)
-		model_input = np.expand_dims(datacube, axis=0)
+		# # Adding batch dimension - (1, 10, 64, 64, 9)
+		# model_input = np.expand_dims(image_sequence, axis=0)
+			
+		# # The training code scales by 255.0, so we do the same here
+		# model_input = model_input.astype(np.float32) / 255.0
+		        # Flatten the (10, 64, 64, 9) array into a 1D vector
+		flattened_features = image_sequence.flatten()
+		
+		# Reshape it into a 2D array with one row for the model
+		model_input = flattened_features.reshape(1, -1)
 
-		print(f"Final model input shape: {model_input.shape}")
+		print(f"Final model input shape: {model_input.shape}, dtype: {model_input.dtype}")
 
 		# Model will return a list of probabilities ([0.42, 0.58])
-		prediction_probs = model.predict(model_input)[0]
+		# prediction_probs = model.predict(model_input)[0]
+		prediction_probs = model.predict_proba(model_input)[0]
+		print(prediction_probs)
 		# Extract the probabilities for non-toxic and toxic
 		prob_non_toxic = prediction_probs[0]
 		prob_toxic = prediction_probs[1]
@@ -80,7 +97,7 @@ def predict():
 		predicted_label = label_map[predicted_class_index]
 
 		# Calculate the date that was predicted for (start_date + 5 days)
-		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=5)
+		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=10)
 
 		# Format the response
 		result = {
