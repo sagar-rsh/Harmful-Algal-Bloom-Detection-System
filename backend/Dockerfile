@@ -10,7 +10,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all files and folders
-COPY . .
+COPY models/ ./models/
+COPY app.py ./
+COPY datacube_generator.py ./
+COPY image_processor.py ./
 
 # Expose the port the app runs on
 EXPOSE 5000
