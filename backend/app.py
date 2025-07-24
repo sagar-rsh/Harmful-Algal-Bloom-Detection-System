@@ -1,6 +1,8 @@
-from flask import Flask, request, jsonify
-from keras.models import load_model
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+# from keras.models import load_model
 import numpy as np
+from datetime import date
 import earthaccess
 import os
 from datetime import datetime, timedelta
@@ -8,9 +10,10 @@ from dotenv import load_dotenv
 from datacube_generator import generate_prediction_datacube
 from image_processor import convert_datacube_to_images
 from joblib import load
+from mangum import Mangum
 
-# Initialize the Flask application
-app = Flask(__name__)
+# Initialize FastAPI
+app = FastAPI(title="HAB Prediction API")
 
 # Model Loading:
 # Load the trained model
@@ -35,32 +38,37 @@ except Exception as e:
 
 label_map = {0: "non-toxic", 1: "toxic"}
 
+# This provides automatic data validation and documentation.
+class PredictionRequest(BaseModel):
+	latitude: float
+	longitude: float
+	date: str
+
+class ConfidenceScores(BaseModel):
+	non_toxic: str
+	toxic: str
+
+class PredictionResponse(BaseModel):
+	prediction_for_date: str
+	predicted_label: str
+	confidence_scores: ConfidenceScores
+
 # API endpoint definition
-@app.route('/predict', methods=['POST'])
-def predict():
+@app.post("/predict", response_model=PredictionResponse)
+def predict(request: PredictionRequest):
 	if model is None:
-		return jsonify({"error": "Model is not loaded. Please check server logs."}), 500
+		raise HTTPException(status_code=500, detail="Model is not loaded. Please check server logs.")
 	
-	if not request.json:
-		return jsonify({"error": "Invalid input: No JSON body received."}), 400
-	
-	# Extract data from the request
-	data = request.json
-
-	required_keys = ['latitude', 'longitude', 'date']
-	if not all(key in data for key in required_keys):
-		return jsonify({"error": f"Missing one of the required keys: {required_keys}"}), 400
-
-	lat = data['latitude']
-	lon = data['longitude']
-	start_date_str = data['date']
-
 	try:
+		lat = request.latitude
+		lon = request.longitude
+		start_date_str = request.date
+
 		# Generate (50, 50, 10, 3) datacube
 		datacube = generate_prediction_datacube(lat, lon, start_date_str)
 
 		if datacube is None:
-			return jsonify({"error": "Failed to generate datacube"}), 400
+			raise HTTPException(status_code=400, detail="Failed to generate datacube")
 		
 		# Convert to resized, normalized, concatenated image sequence
 		# The output shape is now (10, 64, 64, 9)
@@ -99,22 +107,18 @@ def predict():
 		# Calculate the date that was predicted for (start_date + 5 days)
 		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=10)
 
-		# Format the response
-		result = {
-			"prediction_for_date": prediction_target_date.strftime('%Y-%m-%d'),
-			"predicted_label": predicted_label,
-			"confidence_scores": {
-				"non_toxic": f"{prob_non_toxic:.4f}",
-				"toxic": f"{prob_toxic:.4f}"
-			}
-		}
-
-		return jsonify(result), 200
+		# Return a Pydantic model, which FastAPI automatically converts to JSON.
+		return PredictionResponse(
+			prediction_for_date=prediction_target_date.strftime('%Y-%m-%d'),
+			predicted_label=predicted_label,
+			confidence_scores=ConfidenceScores(
+					non_toxic=f"{prob_non_toxic:.4f}",
+					toxic=f"{prob_toxic:.4f}"
+			)
+		)
 
 	except Exception as e:
-		return jsonify({"error": f"An error occurred during prediction: {str(e)}"}), 500
+		print(f"ERROR during prediction: {e}")
+		raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
 	
-
-if __name__ == '__main__':
-	# Run the app on port 5000
-	app.run(host='0.0.0.0', port=5000)
+handler = Mangum(app, lifespan="off")

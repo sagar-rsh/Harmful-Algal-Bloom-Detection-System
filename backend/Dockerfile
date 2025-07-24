@@ -1,7 +1,7 @@
-FROM python:3.10-slim
+FROM public.ecr.aws/lambda/python:3.10
 
 # Set the working directory inside the container
-WORKDIR /app
+WORKDIR /var/task
 
 # Copy the requirements file into the container
 COPY requirements.txt .
@@ -15,8 +15,5 @@ COPY app.py ./
 COPY datacube_generator.py ./
 COPY image_processor.py ./
 
-# Expose the port the app runs on
-EXPOSE 5000
-
 # Command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "300", "app:app"]
+CMD ["app.handler"]

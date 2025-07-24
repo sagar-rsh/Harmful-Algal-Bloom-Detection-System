@@ -1,12 +1,12 @@
-Flask
-pandas
-tensorflow
+fastapi
 joblib
 scikit-learn==1.2.2
-numpy==1.21.6
-gunicorn
+numpy==1.26.4
 python-dotenv
 netCDF4
 earthaccess
 pyproj==3.7.1
 opencv-python-headless
+uvicorn[standard]
+pydantic
+mangum

@@ -146,7 +146,7 @@ def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, cen
         return day_offset, daily_images # Return an empty grid
     
     # Download the found granules to a local cache
-    raw_dir = Path("habnet_data_cache")
+    raw_dir = Path("/tmp/habnet_data_cache")
     raw_dir.mkdir(exist_ok=True)
     files = earthaccess.download([granules[0]], local_path=str(raw_dir))
 
@@ -206,7 +206,7 @@ def generate_prediction_datacube(lat, lon, start_date_str):
 
     # Run tasks for each day in parallel
     # The number of workers (threads) is set to num_days (one for each day) for now (might need to update it later)
-    with ThreadPoolExecutor(max_workers=num_days) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         # This creates a list of future objects, which are placeholders for the results.
         future_to_day = {
             executor.submit(process_single_day, day, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm): day for day in range(num_days)}
