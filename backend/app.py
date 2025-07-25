@@ -12,20 +12,24 @@ from image_processor import convert_datacube_to_images
 from joblib import load
 from mangum import Mangum
 from dependencies import get_api_key
+from enum import Enum
+from config import TIER_CONFIG
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
 
-# Model Loading:
-# Load the trained model
-MODEL_PATH = 'models/model_rf.pkl' # local path for now. Final version will fetch the model from S3.
-try:
-	# model = load_model(MODEL_PATH)
-	model = load(MODEL_PATH)
-	print("Model loaded successfully.")
-except FileNotFoundError:
-	print(f"Error: Model file not found at {MODEL_PATH}.")
-	model = None
+models = {}
+for tier, config in TIER_CONFIG.items():
+	try:
+		path = config["model_path"]
+		if path.endswith(".pkl"):
+			models[tier] = load(path)
+		# elif path.endswith(".h5"):
+		# 	models[tier] = load_model(path)
+		print(f"Loaded model for {tier} from {path}")
+	except Exception as e:
+		print(f"ERROR loading model for {tier}: {e}")
+		models[tier] = None
 
 # Load environment variables
 load_dotenv()
@@ -40,10 +44,16 @@ except Exception as e:
 label_map = {0: "non-toxic", 1: "toxic"}
 
 # This provides automatic data validation and documentation.
+class Tier(str, Enum):
+	FREE = "free"
+	TIER_1 = "tier1"
+	TIER_2 = "tier2"
+
 class PredictionRequest(BaseModel):
 	latitude: float
 	longitude: float
 	date: str
+	tier: Tier
 
 class ConfidenceScores(BaseModel):
 	non_toxic: str
@@ -55,25 +65,31 @@ class PredictionResponse(BaseModel):
 	confidence_scores: ConfidenceScores
 
 # API endpoint definition
-@app.post("/predict")
+@app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key)):
+	print(f"Received prediction request for tier: {request.tier}")
+
+	# Select the config for the requested tier
+	config = TIER_CONFIG[request.tier.value]
+	# Select the pre-loaded model for the tier
+	model = models[request.tier.value]
 	if model is None:
-		raise HTTPException(status_code=500, detail="Model is not loaded. Please check server logs.")
+		raise HTTPException(status_code=500, detail=f"Model for tier '{request.tier.value}' is not loaded.")
 	
 	try:
 		lat = request.latitude
 		lon = request.longitude
 		start_date_str = request.date
 
-		# Generate (50, 50, 10, 3) datacube
-		datacube = generate_prediction_datacube(lat, lon, start_date_str)
+		# Generate the datacube with the specific config
+		datacube = generate_prediction_datacube(lat, lon, start_date_str, config)
 
 		if datacube is None:
 			raise HTTPException(status_code=400, detail="Failed to generate datacube")
 		
 		# Convert to resized, normalized, concatenated image sequence
 		# The output shape is now (10, 64, 64, 9)
-		image_sequence = convert_datacube_to_images(datacube)
+		image_sequence = convert_datacube_to_images(datacube, config)
 
 		'''
 		# Prepare sequence for model

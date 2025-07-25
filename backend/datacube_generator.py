@@ -13,14 +13,8 @@ nc_lock = threading.Lock()
 # Define datacube config (must match with trained model settings)
 DATACUBE_CONFIG = {
     'spatial_extent_km': 100,
-    'temporal_extent_days': 10,
     'spatial_resolution_km': 2,
 }
-HABNET_MODIS_AQUA_MODALITIES = [
-    'chlor_a',      
-    'Rrs_412',     
-    'Rrs_443'      
-]
 
 def get_utm_zone_from_coords(lat, lon):
     """Determines the correct UTM zone EPSG code from lat/lon."""
@@ -130,15 +124,16 @@ def reproject_to_grid(utm_x, utm_y, values, center_utm_x, center_utm_y):
 
     return interpolated.reshape((grid_size, grid_size))
 
-def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm):
+def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm, config):
     """
     Encapsulates all the work needed for one day.
     It will be executed in a separate thread for each of the 10 days.
     """
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
+    modalities = config['modalities']
     target_date = start_date + timedelta(days=day_offset)
     print(f"[Thread] Starting work for Day {day_offset + 1}: {target_date.strftime('%Y-%m-%d')}")
-    daily_images = {mod: np.zeros((grid_size, grid_size)) for mod in HABNET_MODIS_AQUA_MODALITIES}
+    daily_images = {mod: np.zeros((grid_size, grid_size)) for mod in modalities}
 
     granules = search_modis_l2_data(target_date, spatial_bounds)
     if not granules:
@@ -150,7 +145,7 @@ def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, cen
     raw_dir.mkdir(exist_ok=True)
     files = earthaccess.download([granules[0]], local_path=str(raw_dir))
 
-    for modality in HABNET_MODIS_AQUA_MODALITIES:
+    for modality in modalities:
         modality_points = [d for f in files if (d := extract_modality_from_granule(f, modality, spatial_bounds, transformer_to_utm)) is not None]
     
         if not modality_points:
@@ -175,15 +170,16 @@ def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, cen
     # Return the day's index and the processed 2D image
     return day_offset, daily_images
 
-def generate_prediction_datacube(lat, lon, start_date_str):
+def generate_prediction_datacube(lat, lon, start_date_str, config):
     """Generates a single 50x50x10x7 datacube by fetching live satellite data."""
     print(f"Starting Concurrent Datacube Generation for prediction at ({lat}, {lon})")
 
     grid_size = int(DATACUBE_CONFIG['spatial_extent_km'] / DATACUBE_CONFIG['spatial_resolution_km'])
-    num_days = DATACUBE_CONFIG['temporal_extent_days']
-    num_modalities = len(HABNET_MODIS_AQUA_MODALITIES)
+    num_days = config['days']
+    modalities = config['modalities']
+    num_threads = config['threads']
 
-    final_datacube = np.zeros((grid_size, grid_size, num_days, num_modalities))
+    final_datacube = np.zeros((grid_size, grid_size, num_days, len(modalities)))
 
     try:
         start_date = datetime.strptime(start_date_str, '%Y-%m-%d')
@@ -206,17 +202,17 @@ def generate_prediction_datacube(lat, lon, start_date_str):
 
     # Run tasks for each day in parallel
     # The number of workers (threads) is set to num_days (one for each day) for now (might need to update it later)
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
         # This creates a list of future objects, which are placeholders for the results.
         future_to_day = {
-            executor.submit(process_single_day, day, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm): day for day in range(num_days)}
+            executor.submit(process_single_day, day, start_date, spatial_bounds, center_utm_x, center_utm_y, transformer_to_utm, config): day for day in range(num_days)}
 
         # as_completed waits for any of the futures to finish.
         for future in as_completed(future_to_day):
             try:
                 # Get the results
                 day_offset, daily_images = future.result() # tuple (day_offset, daily_images)
-                for mod_idx, modality in enumerate(HABNET_MODIS_AQUA_MODALITIES):
+                for mod_idx, modality in enumerate(modalities):
                     final_datacube[:, :, day_offset, mod_idx] = daily_images[modality]
             except Exception as e:
                 print(f'Day {future_to_day[future] + 1} generated an exception: {e}')
