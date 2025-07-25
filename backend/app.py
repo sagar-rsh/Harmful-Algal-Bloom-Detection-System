@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 # from keras.models import load_model
 import numpy as np
@@ -11,6 +11,7 @@ from datacube_generator import generate_prediction_datacube
 from image_processor import convert_datacube_to_images
 from joblib import load
 from mangum import Mangum
+from dependencies import get_api_key
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
@@ -54,8 +55,8 @@ class PredictionResponse(BaseModel):
 	confidence_scores: ConfidenceScores
 
 # API endpoint definition
-@app.post("/predict", response_model=PredictionResponse)
-def predict(request: PredictionRequest):
+@app.post("/predict")
+async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key)):
 	if model is None:
 		raise HTTPException(status_code=500, detail="Model is not loaded. Please check server logs.")
 	
