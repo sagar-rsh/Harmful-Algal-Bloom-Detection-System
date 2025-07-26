@@ -10,10 +10,10 @@ from dotenv import load_dotenv
 from datacube_generator import generate_prediction_datacube
 from image_processor import convert_datacube_to_images
 from joblib import load
-from mangum import Mangum
 from dependencies import get_api_key
 from enum import Enum
 from config import TIER_CONFIG
+import uvicorn
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
@@ -138,4 +138,6 @@ async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key
 		print(f"ERROR during prediction: {e}")
 		raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
 	
-handler = Mangum(app, lifespan="off")
+if __name__ == '__main__':
+	port = int(os.environ.get("PORT", 8080))
+	uvicorn.run(app, host="0.0.0.0", port=port)

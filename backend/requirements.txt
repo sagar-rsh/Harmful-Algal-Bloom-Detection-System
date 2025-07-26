@@ -9,4 +9,3 @@ pyproj==3.7.1
 opencv-python-headless
 uvicorn[standard]
 pydantic
-mangum
