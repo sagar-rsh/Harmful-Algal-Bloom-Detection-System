@@ -57,7 +57,13 @@ email address @ucdconnect.ie}
 \maketitle
 
 \begin{abstract}
+Harmful Algal Blooms (HABs) pose serious risks to marine ecosystems, human health, and coastal economies. Yet most traditional detection methods remain slow, expensive, and limited in how much area they can cover. In this project, we developed a smarter, faster alternative: an AI-powered HAB Detection System that uses satellite imagery and deep learning to predict toxic bloom events more effectively.
 
+At the core of our system is a CNN+LSTM model trained on spatiotemporal data-cubes built from satellite-derived environmental data. The model takes in three key modalities chlorophyll-a concentration, sea surface temperature, and remote sensing reflectance captured across a 10-day window. To make the system accessible to a range of users, we designed a tiered architecture: a lightweight Free Tier using a single modality over 5 days, and more advanced tiers combining richer data for higher accuracy.
+
+Users interact with the system through a simple web interface where they can click on a map to get instant predictions for any location. Our best performing model (Tier 2) achieved 92\% accuracy, while the lighter tiers offered reasonable performance with reduced data input and compute needs.
+
+By combining geospatial interactivity, deep learning, and flexible design, this system offers a practical step forward in early HAB detection especially for resource-limited agencies that need timely, reliable insights.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -65,8 +71,13 @@ email address @ucdconnect.ie}
 \end{IEEEkeywords}
 
 \section{Introduction}
+Harmful Algal Blooms (HABs) are showing up more frequently and with greater intensity across coastal waters around the world. These toxic blooms, often caused by nutrient runoff and warming ocean temperatures, can do serious damage to marine life, public health, and local economies. In many cases, they've led to large-scale fish deaths, contaminated drinking water, and forced the shutdown of both recreational beaches and fishing operations. Despite the growing threat, most current methods of detecting HABs still rely on manual sampling and lab analysis which are slow, expensive, and not practical for covering large areas in real time.
 
-\section{User Stories and Scenarios}
+Our project set out to build a smarter, more scalable approach using satellite data and deep learning. The aim was to design a system that can predict toxic bloom events from space quickly, accurately, and in a way that's easy for people to use. It fits into a larger effort to apply AI to real-world environmental problems, where timely action can help prevent serious harm.
+
+The main challenge we faced was figuring out how to model the way key environmental variables shift over both space and time. To solve that, we used a hybrid model combining Convolutional Neural Networks (CNNs) and Long Short-Term Memory (LSTM) networks, trained on spatiotemporal datacubes built from satellite imagery. These datacubes cover 10 days of data across three critical variables: chlorophyll-a levels, sea surface temperature, and remote sensing reflectance.
+
+To make the system flexible and widely usable, we also introduced a tiered prediction structure. Users can choose between a lightweight free version which uses minimal data and more advanced tiers that deliver better accuracy using richer inputs. All of this is wrapped into a simple web interface where users can click on a map and get bloom predictions instantly. The result is a system that combines technical depth with real-world accessibility to stay ahead of harmful algal bloom events.\section{User Stories and Scenarios}
 
 \subsection{Marine Biologists and Environmental Agencies}
 
