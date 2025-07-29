@@ -10,10 +10,14 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy all files and folders
-COPY . .
+COPY models/ ./models/
+COPY app.py ./
+COPY datacube_generator.py ./
+COPY image_processor.py ./
+COPY config.py ./
+COPY dependencies.py ./
 
-# Expose the port the app runs on
-EXPOSE 5000
+EXPOSE 8080
 
 # Command to run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "300", "app:app"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
