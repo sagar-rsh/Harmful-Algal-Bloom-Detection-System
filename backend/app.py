@@ -1,6 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
-# from keras.models import load_model
 import numpy as np
 from datetime import date
 import earthaccess
@@ -14,22 +13,31 @@ from dependencies import get_api_key
 from enum import Enum
 from config import TIER_CONFIG
 import uvicorn
+import pickle
+from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import Flatten, Dense, Layer, Multiply, Permute, RepeatVector
+import time 
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
 
 models = {}
-for tier, config in TIER_CONFIG.items():
-	try:
-		path = config["model_path"]
-		if path.endswith(".pkl"):
-			models[tier] = load(path)
-		# elif path.endswith(".h5"):
-		# 	models[tier] = load_model(path)
-		print(f"Loaded model for {tier} from {path}")
-	except Exception as e:
-		print(f"ERROR loading model for {tier}: {e}")
-		models[tier] = None
+# for tier, config in TIER_CONFIG.items():
+# 	try:
+		
+# 		print('Loading Model......................')
+# 		print('TIER :::: ',tier, TIER_CONFIG[tier])
+# 		print('TIER MODEL PATH :::: ', TIER_CONFIG[tier]['model_path'])
+# 		path = config["model_path"]
+# 		if path.endswith(".pkl"):
+# 			models[tier] = load(path)
+# 		elif path.endswith(".h5"):
+# 			models[tier] = load_model(path)
+# 		print(f"Loaded model for {tier} from {path}")
+# 	except Exception as e:
+# 		print(f"ERROR loading model for {tier}: {e}")
+# 		models[tier] = None
+
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +56,7 @@ class Tier(str, Enum):
 	FREE = "free"
 	TIER_1 = "tier1"
 	TIER_2 = "tier2"
+	ADMIN = "admin"
 
 class PredictionRequest(BaseModel):
 	latitude: float
@@ -64,17 +73,41 @@ class PredictionResponse(BaseModel):
 	predicted_label: str
 	confidence_scores: ConfidenceScores
 
+class AttentionLayer(Layer):
+    def __init__(self, **kwargs):
+        super(AttentionLayer, self).__init__(**kwargs)
+        self.dense1 = Dense(1, activation='tanh')
+        self.flatten = Flatten()
+        self.softmax = Dense(10, activation='softmax')
+        self.repeat = RepeatVector(256)
+        self.permute = Permute([2, 1])
+
+    def call(self, inputs):
+        attention_scores = self.dense1(inputs)
+        attention_weights = self.flatten(attention_scores)
+        attention_weights = self.softmax(attention_weights)
+        attention_weights = self.repeat(attention_weights)
+        attention_weights = self.permute(attention_weights)
+        return Multiply()([inputs, attention_weights])
+
 # API endpoint definition
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key)):
-	print(f"Received prediction request for tier: {request.tier}")
+	start = time.time()	
 
 	# Select the config for the requested tier
 	config = TIER_CONFIG[request.tier.value]
-	# Select the pre-loaded model for the tier
-	model = models[request.tier.value]
-	if model is None:
-		raise HTTPException(status_code=500, detail=f"Model for tier '{request.tier.value}' is not loaded.")
+	tier = request.tier.value
+
+	if tier == 'free':
+		model = pickle.load(open(config['model_path'], 'rb'))
+	elif tier == 'tier1':
+		model = load_model(config['model_path'])
+	elif tier in ['tier2', 'admin']:
+		model = load_model(config['model_path'], custom_objects={'AttentionLayer':AttentionLayer})
+	else:
+		raise HTTPException(status_code=500, detail=f"{tier} does not match.")
+		
 	
 	try:
 		lat = request.latitude
@@ -89,7 +122,7 @@ async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key
 		
 		# Convert to resized, normalized, concatenated image sequence
 		# The output shape is now (10, 64, 64, 9)
-		image_sequence = convert_datacube_to_images(datacube, config)
+		image_sequence = convert_datacube_to_images(datacube, config, tier)
 
 		'''
 		# Prepare sequence for model
@@ -99,20 +132,23 @@ async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key
 		# # Adding batch dimension - (1, 10, 64, 64, 9)
 		# model_input = np.expand_dims(image_sequence, axis=0)
 			
-		# # The training code scales by 255.0, so we do the same here
+		# The training code scales by 255.0, so we do the same here
 		# model_input = model_input.astype(np.float32) / 255.0
-		        # Flatten the (10, 64, 64, 9) array into a 1D vector
-		flattened_features = image_sequence.flatten()
+		# Flatten the (10, 64, 64, 9) array into a 1D vector
+		prediction_probs = []
+
+		if tier == 'free':
+			flattened_features = image_sequence.flatten()
+			model_input = flattened_features.reshape(1, -1)
+			prediction_probs = model.predict_proba(model_input)[0]
+			
+		elif tier in ['tier1', 'tier2', 'admin']:
+			print(f'Into {tier} TIER ::::::::')
+			model_input = np.expand_dims(image_sequence,0)
+			print(f"Final model input shape: {model_input.shape}, dtype: {model_input.dtype}")
+			prediction_probs = model.predict(model_input)[0]
 		
-		# Reshape it into a 2D array with one row for the model
-		model_input = flattened_features.reshape(1, -1)
-
-		print(f"Final model input shape: {model_input.shape}, dtype: {model_input.dtype}")
-
-		# Model will return a list of probabilities ([0.42, 0.58])
-		# prediction_probs = model.predict(model_input)[0]
-		prediction_probs = model.predict_proba(model_input)[0]
-		print(prediction_probs)
+		print(prediction_probs, int(time.time() - start))
 		# Extract the probabilities for non-toxic and toxic
 		prob_non_toxic = prediction_probs[0]
 		prob_toxic = prediction_probs[1]
@@ -122,7 +158,7 @@ async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key
 		predicted_label = label_map[predicted_class_index]
 
 		# Calculate the date that was predicted for (start_date + 5 days)
-		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=10)
+		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=config['days'])
 
 		# Return a Pydantic model, which FastAPI automatically converts to JSON.
 		return PredictionResponse(
