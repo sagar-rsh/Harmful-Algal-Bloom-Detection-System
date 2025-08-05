@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
 import numpy as np
 from datetime import date
@@ -17,27 +17,17 @@ import pickle
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Flatten, Dense, Layer, Multiply, Permute, RepeatVector
 import time 
+from ultralytics import YOLO
+import io
+from PIL import Image, ImageDraw
+from fastapi.responses import JSONResponse
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
 
 models = {}
-# for tier, config in TIER_CONFIG.items():
-# 	try:
-		
-# 		print('Loading Model......................')
-# 		print('TIER :::: ',tier, TIER_CONFIG[tier])
-# 		print('TIER MODEL PATH :::: ', TIER_CONFIG[tier]['model_path'])
-# 		path = config["model_path"]
-# 		if path.endswith(".pkl"):
-# 			models[tier] = load(path)
-# 		elif path.endswith(".h5"):
-# 			models[tier] = load_model(path)
-# 		print(f"Loaded model for {tier} from {path}")
-# 	except Exception as e:
-# 		print(f"ERROR loading model for {tier}: {e}")
-# 		models[tier] = None
 
+yolo_model = YOLO("models/algae_detection_model.pt")
 
 # Load environment variables
 load_dotenv()
@@ -173,6 +163,60 @@ async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key
 	except Exception as e:
 		print(f"ERROR during prediction: {e}")
 		raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
+
+@app.post("/predictimage")
+async def predictimage(file: UploadFile = File(...), api_key: str = Depends(get_api_key)):
+    print("Into OBJECT DETECTION CODE :::::::")
+    try:
+    # Check file type
+        if file.content_type not in ["image/jpeg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Unsupported file type.")
+        image_bytes = await file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        results = yolo_model(image, imgsz = 640)
+        detections = []
+        for box in results[0].boxes:
+            print(f"CONFIDENCE ::::::::::::::::::::::: {float(box.conf)}")
+            if float(box.conf) > 0.6:
+                detections.append({
+                "class": int(box.cls),
+                "label": results[0].names[int(box.cls)],
+                "confidence": float(box.conf),
+                "bbox": box.xyxy[0].tolist()
+            })
+            
+            
+        print('YOLO DETECTION COMPLETED :::::::::::::::::')
+        processed_img_b64 = draw_detections_on_image_and_save(image, detections)
+        print('BOUNDING BOX CREATION COMPLETED :::::::::::::::::')
+        return JSONResponse(content={"output_image_url": processed_img_b64})
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
+
+
+import base64
+def draw_detections_on_image_and_save(input_img: Image.Image, detections: list):
+    # Make a copy for drawing
+    print('Creating BOUNDING BOX ::::::::::::::')
+    image = input_img.copy()
+    draw = ImageDraw.Draw(image)
+
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        draw.rectangle([x1, y1, x2, y2], outline='blue', width=4)
+        
+    print('BOUNDING BOX CREATED ::::::::::::::')
+
+    # Ensure the save directory exists
+    if image.mode in ('RGBA', 'P'):
+        image = image.convert('RGB')
+
+    # Convert to base64 for frontend output
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return base64_img
 	
 if __name__ == '__main__':
 	port = int(os.environ.get("PORT", 8080))
