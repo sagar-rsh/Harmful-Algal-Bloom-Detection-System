@@ -1,5 +1,6 @@
 import numpy as np
 import cv2
+from PIL import Image
 
 # Current model expects 64x64 (HxW)
 MODEL_IMG_SIZE = (64, 64)
@@ -43,7 +44,7 @@ def normalize_slice(image_slice, min_val, max_val):
     return bgr_slice
 
 
-def convert_datacube_to_images(numerical_datacube, config):
+def convert_datacube_to_images(numerical_datacube, config, tier):
     """
     Converts a raw numerical datacube into a final sequence of concatenated images.
     """
@@ -58,9 +59,9 @@ def convert_datacube_to_images(numerical_datacube, config):
     # This will hold the final sequence of n images
     final_sequence = []
 
-    for day_idx in range(num_days):
+    for mod_idx in range(num_modalities):
         daily_modality_images = []
-        for mod_idx in range(num_modalities):
+        for day_idx in range(num_days):
             modality_name = modalities[mod_idx]
             min_val, max_val = local_min_max[modality_name]
             
@@ -70,17 +71,23 @@ def convert_datacube_to_images(numerical_datacube, config):
             bgr_slice = normalize_slice(numerical_slice, min_val, max_val)
             
             # Resize to a (64, 64, mod) BGR image
-            resized_bgr_slice = cv2.resize(bgr_slice, MODEL_IMG_SIZE, interpolation=cv2.INTER_LINEAR)
+            if tier == 'free':
+                resized_bgr_slice = cv2.resize(bgr_slice, MODEL_IMG_SIZE, interpolation=cv2.INTER_LINEAR)
+                resized_bgr_slice = resized_bgr_slice.astype('float32') / 255.0
             
+            elif tier in ['tier1', 'tier2', 'admin']:
+                img = Image.fromarray(bgr_slice).resize(MODEL_IMG_SIZE).convert("L")
+                resized_bgr_slice = np.array(img)
+                
             daily_modality_images.append(resized_bgr_slice)
+                    
+        final_sequence.append(daily_modality_images)
         
-        # Concatenate the modality images for this day
-        # Eg: This combines three (64, 64, 3) images into one (64, 64, 9) image
-        concatenated_day_image = np.concatenate(daily_modality_images, axis=-1)
-        final_sequence.append(concatenated_day_image)
+    if tier == 'free':
+        return np.array(final_sequence)
         
     # Stack the num_days daily images to create the final sequence
-    final_sequence_array = np.stack(final_sequence, axis=0)
+    final_sequence_array = np.stack(final_sequence, axis=-1)
     
     print(f"Image conversion and resizing complete. Final shape: {final_sequence_array.shape}")
     return final_sequence_array

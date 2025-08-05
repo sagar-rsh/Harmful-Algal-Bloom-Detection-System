@@ -9,3 +9,9 @@ pyproj==3.7.1
 opencv-python-headless
 uvicorn[standard]
 pydantic
+tensorflow
+xgboost
+Pillow
+ultralytics
+python-multipart
+pybase64
