@@ -1,32 +1,62 @@
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel
 import numpy as np
-from datetime import date
 import earthaccess
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from datacube_generator import generate_prediction_datacube
 from image_processor import convert_datacube_to_images
-from joblib import load
+from joblib import load as joblib_load
 from dependencies import get_api_key
 from enum import Enum
 from config import TIER_CONFIG
 import uvicorn
-import pickle
 from tensorflow.keras.models import load_model
 from tensorflow.keras.layers import Flatten, Dense, Layer, Multiply, Permute, RepeatVector
 import time 
 from ultralytics import YOLO
 import io
-from PIL import Image, ImageDraw
 from fastapi.responses import JSONResponse
+from image_drawer import draw_detections_on_image_and_save
+from PIL import Image
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
 
-models = {}
+class AttentionLayer(Layer):
+    def __init__(self, **kwargs):
+        super(AttentionLayer, self).__init__(**kwargs)
+        self.dense1 = Dense(1, activation='tanh')
+        self.flatten = Flatten()
+        self.softmax = Dense(10, activation='softmax')
+        self.repeat = RepeatVector(256)
+        self.permute = Permute([2, 1])
 
+    def call(self, inputs):
+        attention_scores = self.dense1(inputs)
+        attention_weights = self.flatten(attention_scores)
+        attention_weights = self.softmax(attention_weights)
+        attention_weights = self.repeat(attention_weights)
+        attention_weights = self.permute(attention_weights)
+        return Multiply()([inputs, attention_weights])
+
+models = {}
+for tier, config in TIER_CONFIG.items():
+    try:
+        path = config["model_path"]
+        if path.endswith(".pkl"):
+            models[tier] = joblib_load(path)
+        elif tier == "tier1":
+            models[tier] = load_model(path)
+        elif tier in ["tier2", "admin"]:
+            models[tier] = load_model(path, custom_objects={"AttentionLayer": AttentionLayer})
+        print(f"Loaded model for {tier} from {path}")
+    except Exception as e:
+        print(f"ERROR loading model for {tier}: {e}")
+        models[tier] = None
+
+# Load the YOLO model for object detection
 yolo_model = YOLO("models/algae_detection_model.pt")
 
 # Load environment variables
@@ -63,42 +93,21 @@ class PredictionResponse(BaseModel):
 	predicted_label: str
 	confidence_scores: ConfidenceScores
 
-class AttentionLayer(Layer):
-    def __init__(self, **kwargs):
-        super(AttentionLayer, self).__init__(**kwargs)
-        self.dense1 = Dense(1, activation='tanh')
-        self.flatten = Flatten()
-        self.softmax = Dense(10, activation='softmax')
-        self.repeat = RepeatVector(256)
-        self.permute = Permute([2, 1])
-
-    def call(self, inputs):
-        attention_scores = self.dense1(inputs)
-        attention_weights = self.flatten(attention_scores)
-        attention_weights = self.softmax(attention_weights)
-        attention_weights = self.repeat(attention_weights)
-        attention_weights = self.permute(attention_weights)
-        return Multiply()([inputs, attention_weights])
-
 # API endpoint definition
 @app.post("/predict", response_model=PredictionResponse)
 async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key)):
 	start = time.time()	
 
 	# Select the config for the requested tier
-	config = TIER_CONFIG[request.tier.value]
 	tier = request.tier.value
+	config = TIER_CONFIG.get(tier)
+	model = models.get(tier)
+	model_name = os.path.basename(config['model_path'])
+	print(f"[{tier.upper()}] Using model: {model_name}")
 
-	if tier == 'free':
-		model = pickle.load(open(config['model_path'], 'rb'))
-	elif tier == 'tier1':
-		model = load_model(config['model_path'])
-	elif tier in ['tier2', 'admin']:
-		model = load_model(config['model_path'], custom_objects={'AttentionLayer':AttentionLayer})
-	else:
-		raise HTTPException(status_code=500, detail=f"{tier} does not match.")
+	if model is None:
+		raise HTTPException(status_code=500, detail=f"Model for tier '{tier}' is not available or failed to load.")
 		
-	
 	try:
 		lat = request.latitude
 		lon = request.longitude
@@ -194,29 +203,6 @@ async def predictimage(file: UploadFile = File(...), api_key: str = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
 
-
-import base64
-def draw_detections_on_image_and_save(input_img: Image.Image, detections: list):
-    # Make a copy for drawing
-    print('Creating BOUNDING BOX ::::::::::::::')
-    image = input_img.copy()
-    draw = ImageDraw.Draw(image)
-
-    for det in detections:
-        x1, y1, x2, y2 = det["bbox"]
-        draw.rectangle([x1, y1, x2, y2], outline='blue', width=4)
-        
-    print('BOUNDING BOX CREATED ::::::::::::::')
-
-    # Ensure the save directory exists
-    if image.mode in ('RGBA', 'P'):
-        image = image.convert('RGB')
-
-    # Convert to base64 for frontend output
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG")
-    base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
-    return base64_img
 	
 if __name__ == '__main__':
 	port = int(os.environ.get("PORT", 8080))

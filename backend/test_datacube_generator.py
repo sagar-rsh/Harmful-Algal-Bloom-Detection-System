@@ -22,12 +22,18 @@ except Exception as e:
 start_time = time.time()
 lat, lon = 27.77624, -82.77021
 start_date = "2015-11-09"
+config = {
+        "modalities": ['chlor_a', 'Rrs_412', 'Rrs_443'],
+        "days": 10,
+        "threads": 6,
+        "model_path": "models/Tier-1_model.h5"
+    }
 
-datacube = generate_prediction_datacube(lat, lon, start_date)
+datacube = generate_prediction_datacube(lat, lon, start_date, config)
 print(f'\n{datacube.shape}\n')
 # print(f'\n{datacube}')
 
-image_sequence = convert_datacube_to_images(datacube)
+image_sequence = convert_datacube_to_images(datacube, config)
 print(f'\n{image_sequence.shape}\n')
 
 print("--- %s seconds ---" % (time.time() - start_time))

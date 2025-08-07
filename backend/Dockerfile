@@ -3,6 +3,9 @@ FROM python:3.10-slim
 # Set the working directory inside the container
 WORKDIR /app
 
+# Install OpenCV system dependencies
+RUN apt-get update && apt-get install -y libgl1 libglib2.0-0
+
 # Copy the requirements file into the container
 COPY requirements.txt .
 
@@ -16,6 +19,7 @@ COPY datacube_generator.py ./
 COPY image_processor.py ./
 COPY config.py ./
 COPY dependencies.py ./
+COPY image_drawer.py ./
 
 EXPOSE 8080
 
