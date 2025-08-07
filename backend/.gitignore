@@ -204,3 +204,4 @@ __marimo__/
 # Cache
 habnet_data_cache/
 *.nc
+Tier-2_model.h5
