@@ -19,6 +19,7 @@ from ultralytics import YOLO
 import io
 from fastapi.responses import JSONResponse
 from image_drawer import draw_detections_on_image_and_save
+from PIL import Image
 
 # Initialize FastAPI
 app = FastAPI(title="HAB Prediction API")
