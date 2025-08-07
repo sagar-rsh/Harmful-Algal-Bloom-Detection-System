@@ -141,7 +141,7 @@ def process_single_day(day_offset, start_date, spatial_bounds, center_utm_x, cen
         return day_offset, daily_images # Return an empty grid
     
     # Download the found granules to a local cache
-    raw_dir = Path("./habnet_data_cache")
+    raw_dir = Path("/tmp/habnet_data_cache")
     raw_dir.mkdir(exist_ok=True)
     files = earthaccess.download([granules[0]], local_path=str(raw_dir))
 
