@@ -22,3 +22,5 @@
 *.synctex.gz(busy)
 *.pdfsync
 .streamlit/
+aws/
+google-cloud-sdk/

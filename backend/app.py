@@ -1,24 +1,33 @@
-from flask import Flask, request, jsonify
-from keras.models import load_model
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from pydantic import BaseModel
 import numpy as np
+from datetime import date
 import earthaccess
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from datacube_generator import generate_prediction_datacube
+from image_processor import convert_datacube_to_images
+from joblib import load
+from dependencies import get_api_key
+from enum import Enum
+from config import TIER_CONFIG
+import uvicorn
+import pickle
+from tensorflow.keras.models import load_model
+from tensorflow.keras.layers import Flatten, Dense, Layer, Multiply, Permute, RepeatVector
+import time 
+from ultralytics import YOLO
+import io
+from PIL import Image, ImageDraw
+from fastapi.responses import JSONResponse
 
-# Initialize the Flask application
-app = Flask(__name__)
+# Initialize FastAPI
+app = FastAPI(title="HAB Prediction API")
 
-# Model Loading:
-# Load the trained model
-MODEL_PATH = 'models/hab_model.keras' # local path for now. Final version will fetch the model from S3.
-try:
-	model = load_model(MODEL_PATH)
-	print("Model loaded successfully.")
-except FileNotFoundError:
-	print(f"Error: Model file not found at {MODEL_PATH}.")
-	model = None
+models = {}
+
+yolo_model = YOLO("models/algae_detection_model.pt")
 
 # Load environment variables
 load_dotenv()
@@ -32,45 +41,104 @@ except Exception as e:
 
 label_map = {0: "non-toxic", 1: "toxic"}
 
+# This provides automatic data validation and documentation.
+class Tier(str, Enum):
+	FREE = "free"
+	TIER_1 = "tier1"
+	TIER_2 = "tier2"
+	ADMIN = "admin"
+
+class PredictionRequest(BaseModel):
+	latitude: float
+	longitude: float
+	date: str
+	tier: Tier
+
+class ConfidenceScores(BaseModel):
+	non_toxic: str
+	toxic: str
+
+class PredictionResponse(BaseModel):
+	prediction_for_date: str
+	predicted_label: str
+	confidence_scores: ConfidenceScores
+
+class AttentionLayer(Layer):
+    def __init__(self, **kwargs):
+        super(AttentionLayer, self).__init__(**kwargs)
+        self.dense1 = Dense(1, activation='tanh')
+        self.flatten = Flatten()
+        self.softmax = Dense(10, activation='softmax')
+        self.repeat = RepeatVector(256)
+        self.permute = Permute([2, 1])
+
+    def call(self, inputs):
+        attention_scores = self.dense1(inputs)
+        attention_weights = self.flatten(attention_scores)
+        attention_weights = self.softmax(attention_weights)
+        attention_weights = self.repeat(attention_weights)
+        attention_weights = self.permute(attention_weights)
+        return Multiply()([inputs, attention_weights])
+
 # API endpoint definition
-@app.route('/predict', methods=['POST'])
-def predict():
-	if model is None:
-		return jsonify({"error": "Model is not loaded. Please check server logs."}), 500
+@app.post("/predict", response_model=PredictionResponse)
+async def predict(request: PredictionRequest, api_key: str = Depends(get_api_key)):
+	start = time.time()	
+
+	# Select the config for the requested tier
+	config = TIER_CONFIG[request.tier.value]
+	tier = request.tier.value
+
+	if tier == 'free':
+		model = pickle.load(open(config['model_path'], 'rb'))
+	elif tier == 'tier1':
+		model = load_model(config['model_path'])
+	elif tier in ['tier2', 'admin']:
+		model = load_model(config['model_path'], custom_objects={'AttentionLayer':AttentionLayer})
+	else:
+		raise HTTPException(status_code=500, detail=f"{tier} does not match.")
+		
 	
-	if not request.json:
-		return jsonify({"error": "Invalid input: No JSON body received."}), 400
-	
-	# Extract data from the request
-	data = request.json
-
-	required_keys = ['latitude', 'longitude', 'date']
-	if not all(key in data for key in required_keys):
-		return jsonify({"error": f"Missing one of the required keys: {required_keys}"}), 400
-
-	lat = data['latitude']
-	lon = data['longitude']
-	start_date_str = data['date']
-
 	try:
-		# Generate 15x15x5 datacube
-		datacube = generate_prediction_datacube(lat, lon, start_date_str)
+		lat = request.latitude
+		lon = request.longitude
+		start_date_str = request.date
+
+		# Generate the datacube with the specific config
+		datacube = generate_prediction_datacube(lat, lon, start_date_str, config)
 
 		if datacube is None:
-			return jsonify({"error": "Failed to generate datacube. Check input date format."}), 400
+			raise HTTPException(status_code=400, detail="Failed to generate datacube")
 		
+		# Convert to resized, normalized, concatenated image sequence
+		# The output shape is now (10, 64, 64, 9)
+		image_sequence = convert_datacube_to_images(datacube, config, tier)
+
 		'''
-		# Prepare datacube for model
-		# Current datacube shape is 3D: (width, height, time_steps)-> (15, 15, 5), we need 4D input: (batch_size, width, height, time_steps) for the model
+		# Prepare sequence for model
+		# Current shape is 4D: (time_steps, height, width, channels)-> (10, 64, 64, 9), we need to add the batch dimension: (batch_size, time_steps, height, width, channels) for the model -> (1, 10, 64, 64, 9)
 		# batch: How many datacubes we are predicting at once
 		'''
-		# Adding batch dimension - (1, 15, 15, 5)
-		model_input = np.expand_dims(datacube, axis=0)
+		# # Adding batch dimension - (1, 10, 64, 64, 9)
+		# model_input = np.expand_dims(image_sequence, axis=0)
+			
+		# The training code scales by 255.0, so we do the same here
+		# model_input = model_input.astype(np.float32) / 255.0
+		# Flatten the (10, 64, 64, 9) array into a 1D vector
+		prediction_probs = []
 
-		print(f"Final model input shape: {model_input.shape}")
-
-		# Model will return a list of probabilities ([0.42, 0.58])
-		prediction_probs = model.predict(model_input)[0]
+		if tier == 'free':
+			flattened_features = image_sequence.flatten()
+			model_input = flattened_features.reshape(1, -1)
+			prediction_probs = model.predict_proba(model_input)[0]
+			
+		elif tier in ['tier1', 'tier2', 'admin']:
+			print(f'Into {tier} TIER ::::::::')
+			model_input = np.expand_dims(image_sequence,0)
+			print(f"Final model input shape: {model_input.shape}, dtype: {model_input.dtype}")
+			prediction_probs = model.predict(model_input)[0]
+		
+		print(prediction_probs, int(time.time() - start))
 		# Extract the probabilities for non-toxic and toxic
 		prob_non_toxic = prediction_probs[0]
 		prob_toxic = prediction_probs[1]
@@ -80,24 +148,76 @@ def predict():
 		predicted_label = label_map[predicted_class_index]
 
 		# Calculate the date that was predicted for (start_date + 5 days)
-		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=5)
+		prediction_target_date = datetime.strptime(start_date_str, '%Y-%m-%d') + timedelta(days=config['days'])
 
-		# Format the response
-		result = {
-			"prediction_for_date": prediction_target_date.strftime('%Y-%m-%d'),
-			"predicted_label": predicted_label,
-			"confidence_scores": {
-				"non_toxic": f"{prob_non_toxic:.4f}",
-				"toxic": f"{prob_toxic:.4f}"
-			}
-		}
-
-		return jsonify(result), 200
+		# Return a Pydantic model, which FastAPI automatically converts to JSON.
+		return PredictionResponse(
+			prediction_for_date=prediction_target_date.strftime('%Y-%m-%d'),
+			predicted_label=predicted_label,
+			confidence_scores=ConfidenceScores(
+					non_toxic=f"{prob_non_toxic:.4f}",
+					toxic=f"{prob_toxic:.4f}"
+			)
+		)
 
 	except Exception as e:
-		return jsonify({"error": f"An error occurred during prediction: {str(e)}"}), 500
-	
+		print(f"ERROR during prediction: {e}")
+		raise HTTPException(status_code=500, detail=f"An error occurred during prediction: {str(e)}")
 
+@app.post("/predictimage")
+async def predictimage(file: UploadFile = File(...), api_key: str = Depends(get_api_key)):
+    print("Into OBJECT DETECTION CODE :::::::")
+    try:
+    # Check file type
+        if file.content_type not in ["image/jpeg", "image/png"]:
+            raise HTTPException(status_code=400, detail="Unsupported file type.")
+        image_bytes = await file.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        results = yolo_model(image, imgsz = 640)
+        detections = []
+        for box in results[0].boxes:
+            print(f"CONFIDENCE ::::::::::::::::::::::: {float(box.conf)}")
+            if float(box.conf) > 0.6:
+                detections.append({
+                "class": int(box.cls),
+                "label": results[0].names[int(box.cls)],
+                "confidence": float(box.conf),
+                "bbox": box.xyxy[0].tolist()
+            })
+            
+            
+        print('YOLO DETECTION COMPLETED :::::::::::::::::')
+        processed_img_b64 = draw_detections_on_image_and_save(image, detections)
+        print('BOUNDING BOX CREATION COMPLETED :::::::::::::::::')
+        return JSONResponse(content={"output_image_url": processed_img_b64})
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
+
+
+import base64
+def draw_detections_on_image_and_save(input_img: Image.Image, detections: list):
+    # Make a copy for drawing
+    print('Creating BOUNDING BOX ::::::::::::::')
+    image = input_img.copy()
+    draw = ImageDraw.Draw(image)
+
+    for det in detections:
+        x1, y1, x2, y2 = det["bbox"]
+        draw.rectangle([x1, y1, x2, y2], outline='blue', width=4)
+        
+    print('BOUNDING BOX CREATED ::::::::::::::')
+
+    # Ensure the save directory exists
+    if image.mode in ('RGBA', 'P'):
+        image = image.convert('RGB')
+
+    # Convert to base64 for frontend output
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    base64_img = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return base64_img
+	
 if __name__ == '__main__':
-	# Run the app on port 5000
-	app.run(host='0.0.0.0', port=5000)
+	port = int(os.environ.get("PORT", 8080))
+	uvicorn.run(app, host="0.0.0.0", port=port)
