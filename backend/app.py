@@ -198,7 +198,10 @@ async def predictimage(file: UploadFile = File(...), api_key: str = Depends(get_
         print('YOLO DETECTION COMPLETED :::::::::::::::::')
         processed_img_b64 = draw_detections_on_image_and_save(image, detections)
         print('BOUNDING BOX CREATION COMPLETED :::::::::::::::::')
-        return JSONResponse(content={"output_image_url": processed_img_b64})
+        if not detections:
+            print('NOTHING DETECTED :::::::::::::::::')
+            return JSONResponse(content={"output_image_url": processed_img_b64,"label": "No Algae Detected"})
+        return JSONResponse(content={"output_image_url": processed_img_b64, "label":"Algae Detected"})
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction Error: {str(e)}")
